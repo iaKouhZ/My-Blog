@@ -16,6 +16,8 @@ server {
     # uploads 禁止执行 PHP
     location ^~ /uploads/ {
         location ~ \.php$ { deny all; }
+        # ^~ 会跳过外层正则，上传目录需单独拒绝隐藏路径。
+        location ~ /\. { deny all; }
     }
 
     # 插件/主题/内核中的 PHP 文件一律不允许直接执行（均有 APP_BOOT 守卫，双保险）
@@ -34,6 +36,9 @@ server {
         rewrite ^/(.*)$ /index.php?r=$1 last;
     }
 
+    # 放在通用 PHP 规则之前，隐藏目录内的脚本同样禁止访问。
+    location ~ /\. { deny all; }
+
     location ~ \.php$ {
         try_files $uri =404;
         fastcgi_pass 127.0.0.1:9000;
@@ -41,6 +46,4 @@ server {
         include fastcgi.conf;
     }
 
-    # 禁止访问隐藏文件
-    location ~ /\. { deny all; }
 }

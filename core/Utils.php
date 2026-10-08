@@ -520,7 +520,9 @@ function ip_throttle_allow($bucket, $maxPerMinute)
         return false;
     }
     try {
-        $parts = explode('|', (string) Option::get($key, ''));
+        // Option 缓存可能在等锁之前已载入；必须在锁内读取最新计数，避免并发请求覆盖。
+        $stored = DB::query('options')->where('option_key', '=', $key)->value('option_value');
+        $parts = explode('|', (string) $stored);
         $start = isset($parts[0]) && $parts[0] !== '' ? (int) $parts[0] : 0;
         $count = isset($parts[1]) ? (int) $parts[1] : 0;
         if ($now - $start >= 60) {
