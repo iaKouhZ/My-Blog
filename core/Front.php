@@ -878,6 +878,7 @@ class Front
         }
         // 个人资料改绑场景仅限登录用户，防止被当作对外发码接口滥用
         if ($scene === 'profile' && !Auth::check()) {
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'reason' => 'login_required'));
             json_out(array('code' => 1, 'msg' => theme_t('theme.front.login_required', array(), '请先登录')));
         }
 
@@ -907,6 +908,7 @@ class Front
             }
             // 不暴露账号是否存在：统一提示已发送（若真实存在才会收到验证码）
             if ($target === '') {
+                blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'account' => $account, 'reason' => 'target_unavailable'));
                 json_out(array('code' => 0, 'msg' => theme_t('theme.front.verify_sent', array(), '验证码已发送')));
             }
         } else {
@@ -920,13 +922,16 @@ class Front
 
         // 渠道可用性按插件声明判断（第三方插件声明后即放行）
         if (get_verify_provider($channel) === null) {
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'channel_unavailable'));
             json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_channel_off', array(), '该渠道未启用验证码插件')));
         }
 
         // 按目标加命名锁：60s 间隔/每日上限/实际发送必须互斥完成，
         // 否则并发请求同时通过 count()==0 检查会超限群发（TOCTOU）
-        $lockName = 'vsend_' . md5($channel . '|' . $target);
+        // 邮箱查询使用不区分大小写的排序规则，锁键也须归一，避免大小写别名分到不同锁。
+        $lockName = 'vsend_' . md5($channel . '|' . strtolower($target));
         if (!DB::lock($lockName, 5)) {
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'lock_timeout'));
             json_out(array('code' => 1, 'msg' => theme_t('theme.front.throttled', array(), '操作过于频繁，请稍后再试')));
         }
 
@@ -938,6 +943,7 @@ class Front
             ->count();
         if ($recent > 0) {
             DB::unlock($lockName);
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'resend_interval'));
             json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_retry', array(), '发送过于频繁，请 60 秒后重试')));
         }
         // 每日上限：同目标每日 ≤10 条
@@ -947,6 +953,7 @@ class Front
             ->count();
         if ($today >= 10) {
             DB::unlock($lockName);
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'daily_limit'));
             json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_daily_limit', array(), '今日发送次数已达上限')));
         }
 
@@ -967,6 +974,7 @@ class Front
             ));
             json_out(array('code' => 0, 'msg' => theme_t('theme.front.verify_sent', array(), '验证码已发送')));
         }
+        blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'provider_failed'));
         json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_unavailable', array(), '发送渠道不可用')));
     }
 
@@ -1001,40 +1009,47 @@ class Front
         $maxAttempts = $provider !== null
             ? max(1, min(5, (int) plugin_option($provider, 'max_attempts', 2)))
             : 2;
-        $row = DB::query('verify_codes')
-            ->where('scene', '=', $scene)
-            ->where('target', '=', $target)
-            ->where('channel', '=', $channel)
-            ->where('used', '=', 0)
-            ->orderBy('id', 'DESC')
-            ->first();
-        if (!$row) {
+        // 与发送共用目标锁：错误计数、消费与重发互斥，不能靠读取后写回抵抗并发猜码。
+        $lockName = 'vsend_' . md5($channel . '|' . strtolower($target));
+        if (!DB::lock($lockName, 5)) {
             return false;
         }
-        if (strtotime($row['expires_at']) < time()) {
-            return false;
-        }
-        if ((int) $row['attempts'] >= $maxAttempts) {
-            return false;
-        }
-        if (!hash_equals((string) $row['code'], (string) $code)) {
-            // 错误计数累加；达到上限时一并置 used=1 彻底作废，
-            // 后续核验因 used=0 条件不再命中该行，即使仍在有效期内也无法再试
-            $fail = (int) $row['attempts'] + 1;
-            $update = array('attempts' => $fail);
-            if ($fail >= $maxAttempts) {
-                $update['used'] = 1;
+        try {
+            // 必须裁决最新一条；过滤 used=0 会在新码消费后重新暴露仍未过期的旧码。
+            $row = DB::query('verify_codes')
+                ->where('scene', '=', $scene)
+                ->where('target', '=', $target)
+                ->where('channel', '=', $channel)
+                ->orderBy('id', 'DESC')
+                ->first();
+            if (!$row || (int) $row['used'] !== 0
+                || strtotime($row['expires_at']) <= time()
+                || (int) $row['attempts'] >= $maxAttempts
+            ) {
+                return false;
             }
-            DB::query('verify_codes')->where('id', '=', (int) $row['id'])
-                ->update($update);
-            return false;
+            if (!hash_equals((string) $row['code'], (string) $code)) {
+                $fail = DB::query('verify_codes')
+                    ->where('id', '=', (int) $row['id'])
+                    ->where('used', '=', 0)
+                    ->increment('attempts');
+                if ($fail !== false && $fail >= $maxAttempts) {
+                    DB::query('verify_codes')->where('id', '=', (int) $row['id'])
+                        ->where('used', '=', 0)->update(array('used' => 1));
+                }
+                return false;
+            }
+            // 除一次性标记外，提交时复检有效期与尝试次数，避免等待期间越过边界。
+            $affected = DB::query('verify_codes')
+                ->where('id', '=', (int) $row['id'])
+                ->where('used', '=', 0)
+                ->where('attempts', '<', $maxAttempts)
+                ->where('expires_at', '>', now())
+                ->update(array('used' => 1));
+            return $affected > 0;
+        } finally {
+            DB::unlock($lockName);
         }
-        // 条件更新保证同一验证码仅能被消费一次
-        $affected = DB::query('verify_codes')
-            ->where('id', '=', (int) $row['id'])
-            ->where('used', '=', 0)
-            ->update(array('used' => 1));
-        return $affected > 0;
     }
 
     /** 统一 404 页 */

@@ -57,6 +57,7 @@ class Auth
             || !empty($user['is_banned'])
             || !empty($user['is_deleted'])
         ) {
+            unset($_SESSION['uid'], $_SESSION['pwd_fp'], $_SESSION['role'], $_SESSION['last_active'], $_SESSION['pwd_expired'], $_SESSION['_csrf']);
             self::$user = null;
             return null;
         }
@@ -65,11 +66,12 @@ class Auth
         if (!isset($_SESSION['pwd_fp'])
             || !hash_equals(self::passwordFingerprint($user['password']), (string) $_SESSION['pwd_fp'])
         ) {
-            unset($_SESSION['uid'], $_SESSION['pwd_fp'], $_SESSION['role'], $_SESSION['last_active']);
+            unset($_SESSION['uid'], $_SESSION['pwd_fp'], $_SESSION['role'], $_SESSION['last_active'], $_SESSION['pwd_expired'], $_SESSION['_csrf']);
             self::$user = null;
             return null;
         }
         self::$user = $user;
+        self::syncPasswordExpiry($user);
         return self::$user;
     }
 
@@ -224,13 +226,29 @@ class Auth
 
         if (!$user) {
             blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'not_found'));
-            // 设计妥协（当前版本）：不存在账号直接返回统一模糊话术，不做影子锁定。
-            // 代价是攻击者对同一名字连续失败 5 次后可凭"第 5 次提示差异"探测账号存在性；
-            // 影子锁定方案因每个被喷洒的用户名都会在 options 表 mint 计数行
-            // （喷洒场景下无界增长且 Option::all() 每请求全表加载）被否决，待更优方案再引入
             return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
         }
 
+        // 用户名与邮箱别名共用账号锁；等锁后重读，防并发成功登录清除刚生效的锁定。
+        $lockName = 'login_' . (int) $user['id'];
+        if (!DB::lock($lockName, 5)) {
+            return array('ok' => false, 'code' => 'throttled', 'args' => array(), 'msg' => self::msgOf('throttled'));
+        }
+        try {
+            $user = DB::query('users')->where('id', '=', (int) $user['id'])->first();
+            if (!$user) {
+                blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'not_found'));
+                return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
+            }
+            return self::attemptUser($user, $account, $password);
+        } finally {
+            DB::unlock($lockName);
+        }
+    }
+
+    /** 账号锁内完成状态校验与口令裁决，锁定细节仅进入审计日志 */
+    private static function attemptUser(array $user, $account, $password)
+    {
         // 锁定期检查：与密码错误统一提示，防止探测账号是否存在及其状态（原因仅入审计日志）
         if (!empty($user['locked_until']) && strtotime($user['locked_until']) > time()) {
             blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'locked'));
@@ -263,8 +281,6 @@ class Auth
                 // 极端情况（行被并发删除）：按已达上限处理，宁锁勿放
                 return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
             }
-            $code = 'invalid_credentials';
-            $args = array();
             if ($fail >= $maxFail) {
                 $lockMinutes = max(1, (int) Option::get('login_lock_minutes', 10));
                 // 条件更新置锁定态：仅当计数仍达阈值时写入，避免与并发成功登录清零竞争
@@ -275,29 +291,16 @@ class Auth
                         'locked_until' => date('Y-m-d H:i:s', time() + $lockMinutes * 60),
                         'login_fail'   => 0,
                     ));
-                $code = 'locked';
-                $args = array($lockMinutes);
                 blog_log('auth', 'user.locked', 'success', array('user_id' => (int) $user['id']));
             }
             blog_log('auth', 'login.fail', 'fail', array('user_id' => (int) $user['id'], 'fail_count' => $fail));
-            return array('ok' => false, 'code' => $code, 'args' => $args, 'msg' => self::msgOf($code, $args));
+            return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
         }
 
         // 登录成功：清零失败计数并解除锁定
         DB::update('users', array('login_fail' => 0, 'locked_until' => null), array('id' => (int) $user['id']));
         self::loginUser($user);
         blog_log('auth', 'login', 'success', array('user_id' => (int) $user['id']));
-
-        // 密码过期检查（默认关闭；开启后强制改密）
-        if (Option::get('pwd_expire_enabled', '0') === '1' && !self::isAdmin()) {
-            $days = max(30, min(365, (int) Option::get('pwd_expire_days', 90)));
-            $changedAt = $user['password_changed_at'];
-            $expired = empty($changedAt)
-                || strtotime($changedAt) < time() - $days * 86400;
-            if ($expired) {
-                $_SESSION['pwd_expired'] = 1;
-            }
-        }
 
         return array('ok' => true, 'code' => 'login_success', 'args' => array(), 'msg' => self::msgOf('login_success'));
     }
@@ -315,9 +318,24 @@ class Auth
         $_SESSION['role'] = $user['role'];
         $_SESSION['last_active'] = time();
         $_SESSION['pwd_fp'] = self::passwordFingerprint($user['password']);
-        unset($_SESSION['pwd_expired']);
+        unset($_SESSION['_csrf']);
         self::$user = null;
         self::$userLoaded = false;
+        self::syncPasswordExpiry($user);
+    }
+
+    /** 所有登录通道与既有会话共用到期判定，管理员同样受开启后的策略约束 */
+    private static function syncPasswordExpiry(array $user)
+    {
+        unset($_SESSION['pwd_expired']);
+        if (Option::get('pwd_expire_enabled', '0') !== '1') {
+            return;
+        }
+        $days = max(30, min(365, (int) Option::get('pwd_expire_days', 90)));
+        $changedAt = empty($user['password_changed_at']) ? false : strtotime($user['password_changed_at']);
+        if ($changedAt === false || $changedAt <= time() - $days * 86400) {
+            $_SESSION['pwd_expired'] = 1;
+        }
     }
 
     /**
@@ -356,6 +374,8 @@ class Auth
             );
         }
         session_destroy();
+        self::$user = null;
+        self::$userLoaded = false;
     }
 
     /**
@@ -433,6 +453,7 @@ class Auth
         }
         $code = self::validate_password_strength_code($newPassword, $user['username']);
         if ($code !== '') {
+            blog_log('auth', 'password.change', 'fail', array('user_id' => (int) $userId, 'reason' => $code));
             return array('ok' => false, 'code' => $code, 'args' => array(), 'msg' => self::msgOf($code));
         }
         // 密码历史校验（预留功能，默认关闭）
@@ -462,8 +483,10 @@ class Auth
         // 当前会话若是本人，同步刷新口令指纹保持登录态；其余会话指纹失配自动失效
         if (isset($_SESSION['uid']) && (int) $_SESSION['uid'] === (int) $userId) {
             $_SESSION['pwd_fp'] = self::passwordFingerprint($newHash);
+            unset($_SESSION['pwd_expired']);
+            self::$user = null;
+            self::$userLoaded = false;
         }
-        unset($_SESSION['pwd_expired']);
         blog_log('auth', 'password.change', 'success', array('user_id' => (int) $userId));
         return array('ok' => true, 'code' => 'pwd_changed', 'args' => array(), 'msg' => self::msgOf('pwd_changed'));
     }

@@ -6,6 +6,9 @@ Options -Indexes
     # 子目录部署时请修改为实际子目录，如 RewriteBase /blog/
     RewriteBase /
 
+    # 隐藏文件及隐藏目录一律拒绝，防止 .git 等仓库内容被直接下载。
+    RewriteRule (^|/)\. - [F,L]
+
     # 敏感文件/目录拒绝访问：config.php 与 core/
     RewriteRule ^config\.php$ - [F,L]
     RewriteRule ^core/ - [F,L]
