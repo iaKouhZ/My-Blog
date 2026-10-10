@@ -29,7 +29,7 @@ class Admin
      */
     public static function handle()
     {
-        $m = isset($_GET['m']) && is_string($_GET['m']) ? $_GET['m'] : 'dashboard';
+        $m = input_text('m', 'dashboard', 64, 'get');
         if (!preg_match('#^[a-z]+(/[a-z_]+)?$#', $m)) {
             $m = 'dashboard';
         }
@@ -54,6 +54,7 @@ class Admin
         // 密码过期强制改密拦截（开启后无绕过路径：仅放行改密页、改密提交与登出）
         $isPasswordFlow = $module === 'profile' && in_array($action, array('password', 'password_save'), true);
         if (!empty($_SESSION['pwd_expired']) && !$isPasswordFlow) {
+            blog_log('auth', 'password.expired', 'fail', array('module' => $module, 'action' => $action));
             flash_set('error', admin_t('admin.auth.pwd_expired'));
             redirect(site_base_admin('profile/password'));
         }
@@ -67,6 +68,22 @@ class Admin
         if (!method_exists($class, $method)) {
             // 常见于服务器端核心文件未同步或入口漏加载处理类
             self::forbidden('unknown action');
+        }
+
+        // 仅页面动作允许 GET；保存动作即使未收到 POST 参数，也可能以缺省值覆盖配置。
+        $pageActions = array(
+            'dashboard/index', 'post/list', 'post/edit', 'comment/list', 'category/list',
+            'user/list', 'user/edit', 'setting/site', 'setting/security', 'setting/nav',
+            'theme/list', 'theme/setting', 'plugin/list', 'plugin/page', 'log/list',
+            'profile/index', 'profile/password',
+        );
+        if (!in_array($module . '/' . $action, $pageActions, true)
+            && $_SERVER['REQUEST_METHOD'] !== 'POST'
+        ) {
+            header('Allow: POST');
+            blog_log('security', 'admin.method_denied', 'fail', array('module' => $module, 'action' => $action));
+            http_response_code(405);
+            exit('Method Not Allowed');
         }
 
         // 所有 POST 动作统一 CSRF 校验
@@ -92,6 +109,7 @@ class Admin
     /** 仪表盘 */
     public static function indexAction()
     {
+        Auth::require_cap('read');
         // 全站统计属管理信息：仅管理员计算与可见，user/editor 不暴露（最小信息原则）
         $stats = array();
         $recentLogs = array();
@@ -107,6 +125,7 @@ class Admin
             // 审计日志属敏感数据，仅具备 view_logs 能力点（管理员）才可查看预览
             if (Auth::check_cap('view_logs')) {
                 $recentLogs = DB::query('logs')->orderBy('id', 'DESC')->limit(10)->select();
+                blog_log('security', 'log.view', 'success', array('source' => 'dashboard'));
             }
         }
         self::render(admin_t('admin.menu.dashboard'), 'dashboard', array('stats' => $stats, 'recentLogs' => $recentLogs));

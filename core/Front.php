@@ -64,6 +64,9 @@ class Front
             case 'verify_send':
                 self::verifySend();
                 break;
+            case 'lang_switch':
+                self::langSwitch($params);
+                break;
             default:
                 // 插件自定义路由：经 route_parse 认领的路由名若注册了
                 // front_route_{路由名} 动作则由插件接管，否则照常 404
@@ -125,9 +128,9 @@ class Front
     private static function maskDeletedAuthor(array $author)
     {
         if (!empty($author['is_deleted'])) {
-            $author['nickname'] = '用户已注销';
+            $author['nickname'] = theme_t('theme.front.deleted_user', array(), '用户已注销');
             if (isset($author['username'])) {
-                $author['username'] = '用户已注销';
+                $author['username'] = theme_t('theme.front.deleted_user', array(), '用户已注销');
             }
             $author['avatar'] = '';
             if (isset($author['signature'])) {
@@ -161,7 +164,7 @@ class Front
         }
         foreach ($posts as &$post) {
             $aid = (int) $post['author_id'];
-            $post['author'] = isset($map[$aid]) ? $map[$aid] : array('nickname' => '未知', 'id' => 0, 'avatar' => '');
+            $post['author'] = isset($map[$aid]) ? $map[$aid] : array('nickname' => theme_t('theme.front.unknown_user', array(), '未知'), 'id' => 0, 'avatar' => '');
             $cid = (int) $post['category_id'];
             $post['category'] = isset($catMap[$cid]) ? $catMap[$cid] : null;
         }
@@ -178,7 +181,7 @@ class Front
         }
         self::renderArchive('category', $params['page'], array(
             array('category_id', '=', (int) $cat['id']),
-        ), '分类：' . $cat['name'], array('slug' => $cat['slug']), $cat);
+        ), theme_t('theme.front.category_title', array($cat['name']), '分类：' . $cat['name']), array('slug' => $cat['slug']), $cat);
     }
 
     /** 作者归档 */
@@ -265,7 +268,7 @@ class Front
         }
         Theme::render('search', array(
             'page_type'   => 'search',
-            'title'       => '搜索',
+            'title'       => theme_t('theme.front.search_title', array(), '搜索'),
             'posts'       => $posts,
             'page'        => $page,
             'totalPages'  => $totalPages,
@@ -311,7 +314,7 @@ class Front
         if ((int) $post['category_id'] > 0) {
             $category = DB::query('categories')->where('id', '=', (int) $post['category_id'])->first();
         }
-        $post['author'] = $author ? $author : array('nickname' => '未知', 'id' => 0, 'avatar' => '');
+        $post['author'] = $author ? $author : array('nickname' => theme_t('theme.front.unknown_user', array(), '未知'), 'id' => 0, 'avatar' => '');
         $post['category'] = $category;
 
         // 评论：游客只见 published；作者本人可见自己的 pending
@@ -347,7 +350,7 @@ class Front
         }
         foreach ($comments as &$c) {
             $uid = (int) $c['user_id'];
-            $c['author'] = isset($commentUsers[$uid]) ? $commentUsers[$uid] : array('nickname' => '用户', 'avatar' => '');
+            $c['author'] = isset($commentUsers[$uid]) ? $commentUsers[$uid] : array('nickname' => theme_t('theme.front.default_nickname', array(), '用户'), 'avatar' => '');
         }
         unset($c);
 
@@ -401,18 +404,19 @@ class Front
             $account = input_text('account', '', 128, 'post');
             $password = input_password('password');
             if ($account === '' || $password === '') {
-                $error = '请输入账号和密码';
+                $error = theme_t('theme.front.login_empty', array(), '请输入账号和密码');
             } else {
                 $result = Auth::attempt($account, $password);
                 if ($result['ok']) {
                     redirect(site_base_admin());
                 }
-                $error = $result['msg'];
+                // 服务层只给机器码，按前台主题语言映射（中文缺省为 Auth::msgOf 原文）
+                $error = theme_t('theme.front.auth.' . $result['code'], $result['args'], $result['msg']);
             }
         }
         Theme::render('login', array(
             'page_type' => 'login',
-            'title'     => '登录',
+            'title'     => theme_t('theme.front.login_title', array(), '登录'),
             'error'     => $error,
             'account'   => isset($_POST['account']) ? input_text('account', '', 128, 'post') : '',
         ));
@@ -423,7 +427,7 @@ class Front
     {
         // 管理员可在后台关闭公开注册；GET/POST 均在此拦截
         if (Option::get('register_disabled', '0') === '1') {
-            flash_set('error', '本站已关闭公开注册，如需账号请联系管理员');
+            flash_set('error', theme_t('theme.front.register_closed', array(), '本站已关闭公开注册，如需账号请联系管理员'));
             redirect(Router::url('login'));
         }
         if (Auth::check()) {
@@ -440,10 +444,10 @@ class Front
             // 注册提交限流：注册接口的"用户名/邮箱/手机号已占用"提示可被用于批量枚举，
             // 以 IP 维度限速抬高枚举成本（60s 窗口内超过 10 次即拒绝）
             if (!ip_throttle_allow('register', 10)) {
-                $error = '操作过于频繁，请稍后再试';
+                $error = theme_t('theme.front.throttled', array(), '操作过于频繁，请稍后再试');
                 Theme::render('register', array(
                     'page_type'    => 'register',
-                    'title'        => '注册',
+                    'title'        => theme_t('theme.front.register_title', array(), '注册'),
                     'error'        => $error,
                     'old'          => $old,
                     'emailEnabled' => $emailEnabled,
@@ -461,48 +465,48 @@ class Front
 
             do {
                 if (!preg_match('/^[a-zA-Z0-9_]{3,32}$/', $username)) {
-                    $error = '用户名为 3-32 位字母、数字或下划线';
+                    $error = theme_t('theme.front.username_invalid', array(), '用户名为 3-32 位字母、数字或下划线');
                     break;
                 }
                 if (DB::query('users')->where('username', '=', $username)->value('id')) {
-                    $error = '用户名已被占用';
+                    $error = theme_t('theme.front.username_taken', array(), '用户名已被占用');
                     break;
                 }
                 if ($email !== '' && DB::query('users')->where('email', '=', $email)->value('id')) {
-                    $error = '邮箱已被注册';
+                    $error = theme_t('theme.front.email_taken', array(), '邮箱已被注册');
                     break;
                 }
                 // 手机号作为身份核验凭据，必须全局唯一，防止一号多绑
                 if ($phone !== '' && DB::query('users')->where('phone', '=', $phone)->value('id')) {
-                    $error = '该手机号已被注册';
+                    $error = theme_t('theme.front.phone_taken', array(), '该手机号已被注册');
                     break;
                 }
                 if ($password !== $password2) {
-                    $error = '两次输入的密码不一致';
+                    $error = theme_t('theme.front.password_mismatch', array(), '两次输入的密码不一致');
                     break;
                 }
-                $pwdErr = Auth::validate_password_strength($password, $username);
-                if ($pwdErr !== '') {
-                    $error = $pwdErr;
+                $pwdCode = Auth::validate_password_strength_code($password, $username);
+                if ($pwdCode !== '') {
+                    $error = theme_t('theme.front.auth.' . $pwdCode, array(), Auth::msgOf($pwdCode));
                     break;
                 }
                 // 验证码核验（启用对应插件时才要求）；原子消费，同一验证码并发下只能使用一次
                 if ($emailEnabled) {
                     $code = input_text('email_code', '', 6, 'post');
                     if ($email === '' || !self::consumeVerifyCode('register', $email, $code, 'email')) {
-                        $error = '邮箱验证码错误或已过期';
+                        $error = theme_t('theme.front.email_code_invalid', array(), '邮箱验证码错误或已过期');
                         break;
                     }
                 }
                 if ($smsEnabled) {
                     // 短信插件启用时手机号必填且必须通过验证码核验
                     if ($phone === '') {
-                        $error = '请输入手机号';
+                        $error = theme_t('theme.front.phone_required', array(), '请输入手机号');
                         break;
                     }
                     $code = input_text('sms_code', '', 6, 'post');
                     if (!self::consumeVerifyCode('register', $phone, $code, 'sms')) {
-                        $error = '短信验证码错误或已过期';
+                        $error = theme_t('theme.front.sms_code_invalid', array(), '短信验证码错误或已过期');
                         break;
                     }
                 }
@@ -526,14 +530,14 @@ class Front
                 do_action('user_register', $userId, array(
                     'username' => $username, 'email' => $email, 'phone' => $phone,
                 ));
-                flash_set('success', '注册成功，请登录');
+                flash_set('success', theme_t('theme.front.register_success', array(), '注册成功，请登录'));
                 redirect(Router::url('login'));
             } while (false);
         }
 
         Theme::render('register', array(
             'page_type'    => 'register',
-            'title'        => '注册',
+            'title'        => theme_t('theme.front.register_title', array(), '注册'),
             'error'        => $error,
             'old'          => $old,
             'emailEnabled' => $emailEnabled,
@@ -556,9 +560,9 @@ class Front
         if (!$emailEnabled && !$smsEnabled) {
             Theme::render('forgot', array(
                 'page_type'    => 'forgot',
-                'title'        => '找回密码',
+                'title'        => theme_t('theme.front.forgot_title', array(), '找回密码'),
                 'error'        => '',
-                'info'         => '站点未启用邮箱或短信验证插件，请联系管理员重置密码。',
+                'info'         => theme_t('theme.front.forgot_no_provider', array(), '站点未启用邮箱或短信验证插件，请联系管理员重置密码。'),
                 'emailEnabled' => false,
                 'smsEnabled'   => false,
             ));
@@ -587,22 +591,22 @@ class Front
                 // 该检查仅用于"密码不得包含用户名"，而提交者本身知晓账号名，
                 // 用请求中的账号名判定不泄露任何额外信息
                 if ($newPassword !== $newPassword2) {
-                    $error = '两次输入的新密码不一致';
+                    $error = theme_t('theme.front.new_password_mismatch', array(), '两次输入的新密码不一致');
                     break;
                 }
                 if ($account === '' || $newPassword === '') {
                     // 统一话术：不区分"未填账号"与"账号不存在"
-                    $error = '若账号存在且信息正确，密码将被重置';
+                    $error = theme_t('theme.front.reset_generic', array(), '若账号存在且信息正确，密码将被重置');
                     break;
                 }
-                $pwdErr = Auth::validate_password_strength($newPassword, $account);
-                if ($pwdErr !== '') {
-                    $error = $pwdErr;
+                $pwdCode = Auth::validate_password_strength_code($newPassword, $account);
+                if ($pwdCode !== '') {
+                    $error = theme_t('theme.front.auth.' . $pwdCode, array(), Auth::msgOf($pwdCode));
                     break;
                 }
                 if (!$user) {
                     // 不暴露账号是否存在，统一提示
-                    $error = '若账号存在且信息正确，密码将被重置';
+                    $error = theme_t('theme.front.reset_generic', array(), '若账号存在且信息正确，密码将被重置');
                     break;
                 }
                 // target/channel 解析必须与 verifySend 的发送侧完全一致：
@@ -620,30 +624,30 @@ class Front
                 }
                 if (empty($target)) {
                     // 统一话术：未绑定联系方式也按"账号可能不存在"处理，防止枚举
-                    $error = '若账号存在且信息正确，密码将被重置';
+                    $error = theme_t('theme.front.reset_generic', array(), '若账号存在且信息正确，密码将被重置');
                     break;
                 }
                 // 原子消费验证码：核验与标记已用在同一条件更新中完成，无并发复用窗口
                 if (!self::consumeVerifyCode('reset', $target, $code, $channel)) {
                     // 统一话术：验证码错误不暴露"该账号确实存在"（验证码仅真实账号能收到）
-                    $error = '若账号存在且信息正确，密码将被重置';
+                    $error = theme_t('theme.front.reset_generic', array(), '若账号存在且信息正确，密码将被重置');
                     break;
                 }
                 $result = Auth::changePassword((int) $user['id'], null, $newPassword);
                 if (!$result['ok']) {
-                    $error = $result['msg'];
+                    $error = theme_t('theme.front.auth.' . $result['code'], $result['args'], $result['msg']);
                     break;
                 }
                 blog_log('auth', 'password.reset', 'success', array('user_id' => (int) $user['id']));
                 do_action('password_reset', (int) $user['id']);
-                flash_set('success', '密码已重置，请使用新密码登录');
+                flash_set('success', theme_t('theme.front.reset_success', array(), '密码已重置，请使用新密码登录'));
                 redirect(Router::url('login'));
             } while (false);
         }
 
         Theme::render('forgot', array(
             'page_type'    => 'forgot',
-            'title'        => '找回密码',
+            'title'        => theme_t('theme.front.forgot_title', array(), '找回密码'),
             'error'        => $error,
             'info'         => $info,
             // 失败后回填账号（非敏感信息；密码与验证码不回显），避免用户重填
@@ -661,7 +665,7 @@ class Front
         }
         Csrf::verifyOrDie();
         if (!Auth::check()) {
-            flash_set('error', '请先登录后再发表评论');
+            flash_set('error', theme_t('theme.front.comment_login_required', array(), '请先登录后再发表评论'));
             redirect(Router::url('login'));
         }
         Auth::require_cap('comment');
@@ -683,17 +687,17 @@ class Front
 
         $post = DB::query('posts')->where('id', '=', $postId)->where('status', '=', 'published')->first();
         if (!$post) {
-            flash_set('error', '文章不存在');
+            flash_set('error', theme_t('theme.front.post_not_found', array(), '文章不存在'));
             redirect($back);
         }
         // 插件可按文章拦截评论写入（如评论区关闭）；后台评论管理不受影响
         if (apply_filters('comment_write_allowed', true, 'create', $postId, 0) === false) {
             blog_log('comment', 'comment.create', 'fail', array('post_id' => $postId, 'reason' => 'write_denied'));
-            flash_set('error', '该文章已关闭评论功能');
+            flash_set('error', theme_t('theme.front.comment_closed', array(), '该文章已关闭评论功能'));
             redirect($back);
         }
         if ($content === '') {
-            flash_set('error', '评论内容不能为空');
+            flash_set('error', theme_t('theme.front.comment_empty', array(), '评论内容不能为空'));
             redirect($back);
         }
         if ($parentId > 0) {
@@ -715,7 +719,7 @@ class Front
         // 插件可拦截/改写评论内容
         $data = apply_filters('comment_before_save', $data);
         if (!is_array($data) || empty($data['content'])) {
-            flash_set('error', '评论被拦截');
+            flash_set('error', theme_t('theme.front.comment_blocked', array(), '评论被拦截'));
             redirect($back);
         }
         $data['status'] = Option::get('comment_audit', '0') === '1' ? 'pending' : 'published';
@@ -726,7 +730,9 @@ class Front
             'comment_id' => $commentId, 'post_id' => $postId, 'status' => $data['status'],
             'content' => $data['content'],
         ));
-        flash_set('success', $data['status'] === 'pending' ? '评论已提交，等待审核' : '评论发表成功');
+        flash_set('success', $data['status'] === 'pending'
+            ? theme_t('theme.front.comment_pending', array(), '评论已提交，等待审核')
+            : theme_t('theme.front.comment_success', array(), '评论发表成功'));
         redirect($back);
     }
 
@@ -749,7 +755,7 @@ class Front
         }
         Csrf::verifyOrDie();
         if (!Auth::check()) {
-            flash_set('error', '请先登录后再操作评论');
+            flash_set('error', theme_t('theme.front.comment_login_operate', array(), '请先登录后再操作评论'));
             redirect(Router::url('login'));
         }
         Auth::require_cap('edit_own_comments');
@@ -758,24 +764,24 @@ class Front
         $content = input_text('content', '', 2000, 'post');
         $comment = DB::query('comments')->where('id', '=', $commentId)->first();
         if (!$comment || $comment['status'] === 'trash') {
-            flash_set('error', '评论不存在');
+            flash_set('error', theme_t('theme.front.comment_not_found', array(), '评论不存在'));
             redirect(Router::url('home'));
         }
         $back = self::commentBackUrl($comment, '#comment-' . (int) $comment['id']);
         // 仅允许修改本人评论（管理员管理全部评论走后台 comment 模块）
         if ((int) $comment['user_id'] !== Auth::id()) {
             blog_log('comment', 'comment.update', 'fail', array('comment_id' => $commentId, 'reason' => 'not_owner'));
-            flash_set('error', '只能修改自己发表的评论');
+            flash_set('error', theme_t('theme.front.comment_edit_own', array(), '只能修改自己发表的评论'));
             redirect($back);
         }
         // 与创建同一拦截过滤器（动作为 update），插件可按文章禁止修改
         if (apply_filters('comment_write_allowed', true, 'update', (int) $comment['post_id'], $commentId) === false) {
             blog_log('comment', 'comment.update', 'fail', array('comment_id' => $commentId, 'reason' => 'write_denied'));
-            flash_set('error', '该文章已关闭评论功能');
+            flash_set('error', theme_t('theme.front.comment_closed', array(), '该文章已关闭评论功能'));
             redirect($back);
         }
         if ($content === '') {
-            flash_set('error', '评论内容不能为空');
+            flash_set('error', theme_t('theme.front.comment_empty', array(), '评论内容不能为空'));
             redirect($back);
         }
         $data = array(
@@ -787,7 +793,7 @@ class Front
         // 与新建评论同一过滤链，插件可拦截/改写
         $data = apply_filters('comment_before_save', $data);
         if (!is_array($data) || empty($data['content'])) {
-            flash_set('error', '评论被拦截');
+            flash_set('error', theme_t('theme.front.comment_blocked', array(), '评论被拦截'));
             redirect($back);
         }
         // 评论审核开关开启时，修改后的内容需重新过审，防止绕过审核
@@ -801,7 +807,9 @@ class Front
             'comment_id' => $commentId, 'status' => $status,
             'content' => $data['content'],
         ));
-        flash_set('success', $status === 'pending' ? '评论已修改，待审核后显示' : '评论已修改');
+        flash_set('success', $status === 'pending'
+            ? theme_t('theme.front.comment_updated_pending', array(), '评论已修改，待审核后显示')
+            : theme_t('theme.front.comment_updated', array(), '评论已修改'));
         redirect($back);
     }
 
@@ -813,7 +821,7 @@ class Front
         }
         Csrf::verifyOrDie();
         if (!Auth::check()) {
-            flash_set('error', '请先登录后再操作评论');
+            flash_set('error', theme_t('theme.front.comment_login_operate', array(), '请先登录后再操作评论'));
             redirect(Router::url('login'));
         }
         Auth::require_cap('delete_own_comments');
@@ -821,19 +829,19 @@ class Front
         $commentId = input_int('comment_id', 0, 'post');
         $comment = DB::query('comments')->where('id', '=', $commentId)->first();
         if (!$comment || $comment['status'] === 'trash') {
-            flash_set('error', '评论不存在');
+            flash_set('error', theme_t('theme.front.comment_not_found', array(), '评论不存在'));
             redirect(Router::url('home'));
         }
         $back = self::commentBackUrl($comment);
         if ((int) $comment['user_id'] !== Auth::id()) {
             blog_log('comment', 'comment.delete', 'fail', array('comment_id' => $commentId, 'reason' => 'not_owner'));
-            flash_set('error', '只能删除自己发表的评论');
+            flash_set('error', theme_t('theme.front.comment_delete_own', array(), '只能删除自己发表的评论'));
             redirect($back);
         }
         // 与创建同一拦截过滤器（动作为 delete），插件可按文章禁止删除
         if (apply_filters('comment_write_allowed', true, 'delete', (int) $comment['post_id'], $commentId) === false) {
             blog_log('comment', 'comment.delete', 'fail', array('comment_id' => $commentId, 'reason' => 'write_denied'));
-            flash_set('error', '该文章已关闭评论功能');
+            flash_set('error', theme_t('theme.front.comment_closed', array(), '该文章已关闭评论功能'));
             redirect($back);
         }
         // 有未删回复时禁止删除，避免回复成为无法展示的孤儿数据
@@ -842,12 +850,12 @@ class Front
             ->where('status', '!=', 'trash')
             ->count();
         if ($childCount > 0) {
-            flash_set('error', '该评论存在回复，无法删除');
+            flash_set('error', theme_t('theme.front.comment_has_replies', array(), '该评论存在回复，无法删除'));
             redirect($back);
         }
         DB::update('comments', array('status' => 'trash'), array('id' => $commentId));
         blog_log('comment', 'comment.delete', 'success', array('comment_id' => $commentId));
-        flash_set('success', '评论已删除');
+        flash_set('success', theme_t('theme.front.comment_deleted', array(), '评论已删除'));
         redirect($back);
     }
 
@@ -862,15 +870,16 @@ class Front
         $channel = input_enum('channel', array('email', 'sms'), '', 'post');
 
         if ($scene === '') {
-            json_out(array('code' => 1, 'msg' => '参数不完整'));
+            json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_param_incomplete', array(), '参数不完整')));
         }
         // IP 维度限流：防止攻击者枚举大量不同目标把本站当作邮件/短信轰炸器
         if (!ip_throttle_allow('verify_send', 10)) {
-            json_out(array('code' => 1, 'msg' => '操作过于频繁，请稍后再试'));
+            json_out(array('code' => 1, 'msg' => theme_t('theme.front.throttled', array(), '操作过于频繁，请稍后再试')));
         }
         // 个人资料改绑场景仅限登录用户，防止被当作对外发码接口滥用
         if ($scene === 'profile' && !Auth::check()) {
-            json_out(array('code' => 1, 'msg' => '请先登录'));
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'reason' => 'login_required'));
+            json_out(array('code' => 1, 'msg' => theme_t('theme.front.login_required', array(), '请先登录')));
         }
 
         if ($scene === 'reset') {
@@ -878,7 +887,7 @@ class Front
             // 不能先按邮箱/手机格式预校验（用户名必然不通过，会误报“参数不完整”）
             $account = input_text('target', '', 128, 'post');
             if ($account === '') {
-                json_out(array('code' => 1, 'msg' => '参数不完整'));
+                json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_param_incomplete', array(), '参数不完整')));
             }
             $target = '';
             if (strpos($account, '@') !== false) {
@@ -899,27 +908,31 @@ class Front
             }
             // 不暴露账号是否存在：统一提示已发送（若真实存在才会收到验证码）
             if ($target === '') {
-                json_out(array('code' => 0, 'msg' => '验证码已发送'));
+                blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'account' => $account, 'reason' => 'target_unavailable'));
+                json_out(array('code' => 0, 'msg' => theme_t('theme.front.verify_sent', array(), '验证码已发送')));
             }
         } else {
             $target = $channel === 'email'
                 ? input_email('target', '', 'post')
                 : input_phone('target', '', 'post');
             if ($channel === '' || $target === '') {
-                json_out(array('code' => 1, 'msg' => '参数不完整'));
+                json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_param_incomplete', array(), '参数不完整')));
             }
         }
 
         // 渠道可用性按插件声明判断（第三方插件声明后即放行）
         if (get_verify_provider($channel) === null) {
-            json_out(array('code' => 1, 'msg' => '该渠道未启用验证码插件'));
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'channel_unavailable'));
+            json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_channel_off', array(), '该渠道未启用验证码插件')));
         }
 
         // 按目标加命名锁：60s 间隔/每日上限/实际发送必须互斥完成，
         // 否则并发请求同时通过 count()==0 检查会超限群发（TOCTOU）
-        $lockName = 'vsend_' . md5($channel . '|' . $target);
+        // 邮箱查询使用不区分大小写的排序规则，锁键也须归一，避免大小写别名分到不同锁。
+        $lockName = 'vsend_' . md5($channel . '|' . strtolower($target));
         if (!DB::lock($lockName, 5)) {
-            json_out(array('code' => 1, 'msg' => '操作过于频繁，请稍后再试'));
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'lock_timeout'));
+            json_out(array('code' => 1, 'msg' => theme_t('theme.front.throttled', array(), '操作过于频繁，请稍后再试')));
         }
 
         // 频率限制：60s 重发间隔
@@ -930,7 +943,8 @@ class Front
             ->count();
         if ($recent > 0) {
             DB::unlock($lockName);
-            json_out(array('code' => 1, 'msg' => '发送过于频繁，请 60 秒后重试'));
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'resend_interval'));
+            json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_retry', array(), '发送过于频繁，请 60 秒后重试')));
         }
         // 每日上限：同目标每日 ≤10 条
         $today = DB::query('verify_codes')
@@ -939,7 +953,8 @@ class Front
             ->count();
         if ($today >= 10) {
             DB::unlock($lockName);
-            json_out(array('code' => 1, 'msg' => '今日发送次数已达上限'));
+            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'daily_limit'));
+            json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_daily_limit', array(), '今日发送次数已达上限')));
         }
 
         try {
@@ -957,9 +972,10 @@ class Front
             blog_log('verify', 'verify.send', 'success', array(
                 'scene' => $scene, 'channel' => $channel, 'target' => $target,
             ));
-            json_out(array('code' => 0, 'msg' => '验证码已发送'));
+            json_out(array('code' => 0, 'msg' => theme_t('theme.front.verify_sent', array(), '验证码已发送')));
         }
-        json_out(array('code' => 1, 'msg' => '发送渠道不可用'));
+        blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'provider_failed'));
+        json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_unavailable', array(), '发送渠道不可用')));
     }
 
     /**
@@ -993,40 +1009,47 @@ class Front
         $maxAttempts = $provider !== null
             ? max(1, min(5, (int) plugin_option($provider, 'max_attempts', 2)))
             : 2;
-        $row = DB::query('verify_codes')
-            ->where('scene', '=', $scene)
-            ->where('target', '=', $target)
-            ->where('channel', '=', $channel)
-            ->where('used', '=', 0)
-            ->orderBy('id', 'DESC')
-            ->first();
-        if (!$row) {
+        // 与发送共用目标锁：错误计数、消费与重发互斥，不能靠读取后写回抵抗并发猜码。
+        $lockName = 'vsend_' . md5($channel . '|' . strtolower($target));
+        if (!DB::lock($lockName, 5)) {
             return false;
         }
-        if (strtotime($row['expires_at']) < time()) {
-            return false;
-        }
-        if ((int) $row['attempts'] >= $maxAttempts) {
-            return false;
-        }
-        if (!hash_equals((string) $row['code'], (string) $code)) {
-            // 错误计数累加；达到上限时一并置 used=1 彻底作废，
-            // 后续核验因 used=0 条件不再命中该行，即使仍在有效期内也无法再试
-            $fail = (int) $row['attempts'] + 1;
-            $update = array('attempts' => $fail);
-            if ($fail >= $maxAttempts) {
-                $update['used'] = 1;
+        try {
+            // 必须裁决最新一条；过滤 used=0 会在新码消费后重新暴露仍未过期的旧码。
+            $row = DB::query('verify_codes')
+                ->where('scene', '=', $scene)
+                ->where('target', '=', $target)
+                ->where('channel', '=', $channel)
+                ->orderBy('id', 'DESC')
+                ->first();
+            if (!$row || (int) $row['used'] !== 0
+                || strtotime($row['expires_at']) <= time()
+                || (int) $row['attempts'] >= $maxAttempts
+            ) {
+                return false;
             }
-            DB::query('verify_codes')->where('id', '=', (int) $row['id'])
-                ->update($update);
-            return false;
+            if (!hash_equals((string) $row['code'], (string) $code)) {
+                $fail = DB::query('verify_codes')
+                    ->where('id', '=', (int) $row['id'])
+                    ->where('used', '=', 0)
+                    ->increment('attempts');
+                if ($fail !== false && $fail >= $maxAttempts) {
+                    DB::query('verify_codes')->where('id', '=', (int) $row['id'])
+                        ->where('used', '=', 0)->update(array('used' => 1));
+                }
+                return false;
+            }
+            // 除一次性标记外，提交时复检有效期与尝试次数，避免等待期间越过边界。
+            $affected = DB::query('verify_codes')
+                ->where('id', '=', (int) $row['id'])
+                ->where('used', '=', 0)
+                ->where('attempts', '<', $maxAttempts)
+                ->where('expires_at', '>', now())
+                ->update(array('used' => 1));
+            return $affected > 0;
+        } finally {
+            DB::unlock($lockName);
         }
-        // 条件更新保证同一验证码仅能被消费一次
-        $affected = DB::query('verify_codes')
-            ->where('id', '=', (int) $row['id'])
-            ->where('used', '=', 0)
-            ->update(array('used' => 1));
-        return $affected > 0;
     }
 
     /** 统一 404 页 */
@@ -1035,7 +1058,40 @@ class Front
         http_response_code(404);
         Theme::render('404', array(
             'page_type' => '404',
-            'title'     => '页面不存在',
+            'title'     => theme_t('theme.front.notfound_title', array(), '页面不存在'),
         ));
+    }
+
+    /**
+     * 前台语言切换（GET）：语言码白名单校验后写 cookie 偏好并安全回跳。
+     * 游客操作、不改服务端状态，无需 CSRF 与审计；偏好优先级高于浏览器自动检测
+     *
+     * @param array $params 路由参数（code）
+     * @return void
+     */
+    private static function langSwitch(array $params)
+    {
+        $code = isset($params['code']) ? $params['code'] : '';
+        $available = Theme::availableLangs();
+        if (isset($available[$code])) {
+            // 偏好 cookie 与会话 cookie 同口径：HttpOnly + SameSite=Lax，HTTPS 下加 Secure
+            setcookie(Theme::LANG_COOKIE, $code, array(
+                'expires'  => time() + 365 * 86400,
+                'path'     => '/',
+                'secure'   => is_https(),
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ));
+        }
+        // 防开放重定向：仅允许站内安全字符组成的相对路径（与评论提交回跳同口径）
+        $back = Router::url('home');
+        $candidate = input_text('redirect', '', 255, 'get');
+        if ($candidate !== ''
+            && preg_match('#^[A-Za-z0-9/_.?=&%-]+$#', $candidate)
+            && strpos($candidate, '//') === false
+            && strpos($candidate, Router::base() . '/') === 0) {
+            $back = $candidate;
+        }
+        redirect($back);
     }
 }

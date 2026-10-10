@@ -21,8 +21,9 @@
   攻击期间保有可信的自助进入途径。封禁 / 禁用 / 注销等账号状态在两条通道同等生效，
   不存在绕过空间；
 - **state 双重防伪**：HMAC-SHA256 签名 + 会话随机数一次性校验（10 分钟有效），防 CSRF 与重放；
-- **回调限流**：同一 IP 每分钟最多 10 次回调；
-- **绑定存储**：`plugin_data` 表用户级作用域（`qq_openid` / `qq_nickname`），一个 QQ 只能绑定一个账号；
+- **回调限流**：复用内核 `ip_throttle_allow('qq_callback', 10)`，同一 IP 每分钟最多 10 次回调，IPv6 按 /64 归一；取锁失败即拒绝，计数在锁内读取最新值；
+- **绑定存储**：`plugin_data` 表用户级作用域（`qq_openid` / `qq_nickname`），一个 QQ 只能绑定一个账号；按 OpenID 加锁，未取得锁时拒绝写入；
+- **密码过期**：内核策略默认关闭；开启后 QQ 登录同样建立过期标记，既有会话到期后也受后台拦截，绑定/解绑需先完成强制改密；
 - **TLS 强校验**：所有对 graph.qq.com 的请求强制验证证书；
 - **密钥保护**：APP Key 与签名密钥不出现在页面回显、日志中；设置页留空表示保持不变。
 
@@ -31,5 +32,9 @@
 - 自定义路由：`route_parse` 过滤器 + `front_route_{name}` 动作（回调 / 解绑端点）
 - 主题钩子：`auth_form_footer`（登录页入口）、后台视图钩子 `profile_cards`（绑定卡片）
 - 数据 API：`plugin_option` / `plugin_data_*` / `plugin_user_*`
+- 认证与限流：`Auth::loginUser()` / `Auth::require_cap()` / `ip_throttle_allow()`
+
+升级无需新增表或字段；绑定数据沿用原结构。回调计数改由内核 options 计数器维护，
+旧 `plugin_data.rl_*` 临时行由已有过期清理逻辑回收。
 
 插件卸载时内核自动清理全部配置与绑定数据，无残留。

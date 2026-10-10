@@ -4,6 +4,8 @@
  */
 defined('APP_BOOT') or exit;
 $vditorAvailable = is_file(APP_ROOT . '/assets/vendor/vditor/dist/index.min.js');
+// Vditor 界面语言白名单映射：dist/js/i18n 仅本地化 zh_CN/en_US 两包，其余回退中文
+$vditorLang = in_array(Lang::code(), array('zh_CN', 'en_US'), true) ? Lang::code() : 'zh_CN';
 // 新建文章默认直接发布；审核开关开启且无审核权限时默认提交审核
 if ($post) {
     $currentStatus = $post['status'];
@@ -139,6 +141,8 @@ $isPageOn = $post && (int) $post['is_page'] === 1;
     window.cbVditor = new Vditor('vditor', {
         // 必须指定本地 cdn：Vditor 默认从 unpkg CDN 懒加载 lute/图标等子资源，违反禁 CDN 约束
         cdn: <?php echo json_out_script(assets_url('vendor/vditor')); ?>,
+        // 界面语言：随后台语言，经白名单映射（dist/js/i18n 已本地化对应语言包）
+        lang: <?php echo json_out_script($vditorLang); ?>,
         // emoji 图片路径同样默认指向内置 CDN，须显式指向本地 dist/images/emoji
         emojiPath: <?php echo json_out_script(assets_url('vendor/vditor/dist/images/emoji')); ?>,
         height: 420,

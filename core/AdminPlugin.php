@@ -27,28 +27,30 @@ class AdminPlugin
     {
         Auth::require_cap('manage_plugins');
         if (empty($_FILES['plugin_zip'])) {
-            flash_set('error', '请选择要上传的 zip 文件');
+            flash_set('error', admin_t('admin.plugin.zip_required'));
             redirect(site_base_admin('plugin/list'));
         }
         $file = $_FILES['plugin_zip'];
         $err = ZipSafe::uploadError($file, 10 * 1024 * 1024);
-        if ($err !== '') {
-            flash_set('error', $err);
+        if ($err !== null) {
+            flash_set('error', admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('plugin/list'));
         }
 
         $zip = null;
         // 必需条目仅粗筛"包内至少一个 slug 风格命名的 php"，主文件合法性在解压后判定
         $err = ZipSafe::openChecked($file['tmp_name'], '#(^|/)[a-z0-9-]{1,64}\.php$#', $zip);
-        if ($err !== '') {
-            blog_log('plugin', 'plugin.upload', 'fail', array('reason' => $err));
-            flash_set('error', $err === 'zip 包缺少必需的文件' ? '插件包内未找到主文件（{slug}.php）' : $err);
+        if ($err !== null) {
+            blog_log('plugin', 'plugin.upload', 'fail', array('reason' => $err['code']));
+            flash_set('error', $err['code'] === 'zip_missing_required'
+                ? admin_t('admin.plugin.zip_no_main')
+                : admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('plugin/list'));
         }
         $tmp = '';
         $err = ZipSafe::extractToTemp($zip, APP_ROOT . '/plugins', $tmp);
-        if ($err !== '') {
-            flash_set('error', $err);
+        if ($err !== null) {
+            flash_set('error', admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('plugin/list'));
         }
         // slug 由包内主文件推导：顶层 {slug}.php 且头部含 Plugin Name（与 Plugin::discover 同一判定）
@@ -67,7 +69,7 @@ class AdminPlugin
         if ($slug === '') {
             ZipSafe::removeDir($tmp);
             blog_log('plugin', 'plugin.upload', 'fail', array('reason' => 'main_file_missing'));
-            flash_set('error', '包内未找到合法插件主文件（{slug}.php 且头部须声明 Plugin Name）');
+            flash_set('error', admin_t('admin.plugin.main_file_invalid'));
             redirect(site_base_admin('plugin/list'));
         }
 
@@ -79,22 +81,22 @@ class AdminPlugin
             if ($oldMeta !== null && $meta['name'] !== $oldMeta['name']) {
                 ZipSafe::removeDir($tmp);
                 blog_log('plugin', 'plugin.update', 'fail', array('plugin' => $slug, 'reason' => 'name_mismatch'));
-                flash_set('error', '包内 Plugin Name 与现有插件不一致，已拒绝覆盖');
+                flash_set('error', admin_t('admin.plugin.name_mismatch'));
                 redirect(site_base_admin('plugin/list'));
             }
         }
         $err = ZipSafe::swapIn($tmp, $dest);
-        if ($err !== '') {
+        if ($err !== null) {
             blog_log('plugin', $isUpdate ? 'plugin.update' : 'plugin.upload', 'fail', array(
-                'plugin' => $slug, 'reason' => $err,
+                'plugin' => $slug, 'reason' => $err['code'],
             ));
-            flash_set('error', $err);
+            flash_set('error', admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('plugin/list'));
         }
         blog_log('plugin', $isUpdate ? 'plugin.update' : 'plugin.upload', 'success', array(
             'plugin' => $slug, 'version' => $meta['version'],
         ));
-        flash_set('success', ($isUpdate ? '插件已覆盖更新：' : '插件已上传：') . $slug);
+        flash_set('success', admin_t($isUpdate ? 'admin.plugin.updated' : 'admin.plugin.uploaded', array($slug)));
         redirect(site_base_admin('plugin/list'));
     }
 

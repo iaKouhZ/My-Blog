@@ -42,7 +42,7 @@ class Csrf
     public static function check($token = null)
     {
         if ($token === null) {
-            $token = isset($_POST['_csrf']) ? (string) $_POST['_csrf'] : '';
+            $token = input_password('_csrf', '', 128, 'post');
         }
         if (!is_string($token) || $token === '' || empty($_SESSION['_csrf'])) {
             return false;

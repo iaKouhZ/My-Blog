@@ -28,6 +28,28 @@ function admin_t($key, array $args = array())
 }
 
 /**
+ * 文案占位格式化：顺序替换 %s（%% 转义为 %）；参数不足时保留原占位符，不抛警告
+ * Lang::t / Theme::t / Auth::msgOf / ZipSafe::msgOf 共用的唯一实现
+ *
+ * @param string $text 含占位的文案
+ * @param array  $args 占位参数
+ * @return string
+ */
+function msg_format($text, array $args)
+{
+    if (empty($args)) {
+        return $text;
+    }
+    $i = 0;
+    return preg_replace_callback('/%%|%s/', function ($m) use ($args, &$i) {
+        if ($m[0] === '%%') {
+            return '%';
+        }
+        return isset($args[$i]) ? (string) $args[$i++] : $m[0];
+    }, $text);
+}
+
+/**
  * 是否 HTTPS 环境
  *
  * @return bool
@@ -498,7 +520,9 @@ function ip_throttle_allow($bucket, $maxPerMinute)
         return false;
     }
     try {
-        $parts = explode('|', (string) Option::get($key, ''));
+        // Option 缓存可能在等锁之前已载入；必须在锁内读取最新计数，避免并发请求覆盖。
+        $stored = DB::query('options')->where('option_key', '=', $key)->value('option_value');
+        $parts = explode('|', (string) $stored);
         $start = isset($parts[0]) && $parts[0] !== '' ? (int) $parts[0] : 0;
         $count = isset($parts[1]) ? (int) $parts[1] : 0;
         if ($now - $start >= 60) {

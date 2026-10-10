@@ -64,6 +64,31 @@ return array(
     /* ---------- Auth/session ---------- */
     'admin.auth.logout'       => 'Log out',
     'admin.auth.pwd_expired'  => 'Your password has expired. Please change it first',
+    // The following 8 keys map to Auth::msgOf machine codes
+    'admin.auth.pwd_len'          => 'Password must be 8-64 characters',
+    'admin.auth.pwd_classes'      => 'Password must contain at least 3 of: uppercase letters, lowercase letters, digits, special characters',
+    'admin.auth.pwd_contain_name' => 'Password must not contain the username',
+    'admin.auth.pwd_weak'         => 'Password is too simple (weak password blacklist hit)',
+    'admin.auth.user_not_found'   => 'User not found',
+    'admin.auth.old_password_wrong' => 'Current password is incorrect',
+    'admin.auth.pwd_history_hit'  => 'New password cannot be the same as any of the last %s passwords',
+    'admin.auth.pwd_changed'      => 'Password changed successfully',
+
+    /* ---------- Zip upload pipeline (maps ZipSafe::msgOf machine codes) ---------- */
+    'admin.zipsafe.upload_server_limit'   => 'File exceeds the server upload limit (approx. %sMB)',
+    'admin.zipsafe.upload_no_file'        => 'Please select a zip file to upload (error code %s)',
+    'admin.zipsafe.zip_too_large'         => 'Zip file must not exceed %sMB',
+    'admin.zipsafe.zip_ext_only'          => 'Only .zip format is supported',
+    'admin.zipsafe.zip_no_ziparchive'     => 'The ZipArchive extension is not enabled on the server; cannot extract zip packages',
+    'admin.zipsafe.zip_open_failed'       => 'Unable to open the zip file',
+    'admin.zipsafe.zip_illegal_path'      => 'The zip contains entries with illegal paths',
+    'admin.zipsafe.zip_entry_denied'      => 'The zip contains a disallowed entry: %s',
+    'admin.zipsafe.zip_entry_type_denied' => 'The zip contains a disallowed entry type (symlink etc.): %s',
+    'admin.zipsafe.zip_missing_required'  => 'The zip package is missing a required file',
+    'admin.zipsafe.zip_extract_failed'    => 'Failed to extract the zip',
+    'admin.zipsafe.dest_create_failed'    => 'Failed to create the target directory',
+    'admin.zipsafe.backup_failed'         => 'Failed to back up the old directory; overwrite aborted',
+    'admin.zipsafe.swap_failed'           => 'Failed to move the new directory into place; rolled back',
 
     /* ---------- Site/security/nav settings ---------- */
     'admin.setting.site_name'              => 'Site Name',
@@ -262,6 +287,7 @@ return array(
     'admin.user.email_taken'           => 'Email is already taken',
     'admin.user.phone_taken'           => 'Phone number is already taken',
     'admin.user.gen_pwd_error'         => 'Initial password generation error: %s',
+    'admin.user.concurrent_conflict'   => 'Username/email/phone already taken (concurrent conflict), please retry',
     'admin.user.created_with_pwd'      => 'User created. Initial password (shown only once, share via a secure channel): %s',
     'admin.user.operator_pwd_required' => 'Resetting password or changing email/phone requires your (operator) current password',
     'admin.user.self_protect'          => 'You cannot disable or change the role of your own account',
@@ -352,6 +378,7 @@ return array(
     'admin.theme.updated'           => 'Theme overwritten and updated: %s',
     'admin.theme.no_overwrite_active' => 'Cannot overwrite the currently active theme; please switch to another theme first',
     'admin.theme.name_mismatch'     => 'The Theme Name in the package does not match the existing theme; overwrite rejected',
+    'admin.theme.upload_tip'        => 'A theme with the same name will be overwritten (old directory backed up automatically, rollback on failure); the active theme and default cannot be overwritten. Server upload limit approx. %sMB; program limit 10MB.',
 
     /* ---------- Plugins ---------- */
     'admin.plugin.orphan_tip'        => 'The directories of the following plugins no longer exist (possibly deleted directly instead of uninstalled), but their configuration and data remain in the database:',
@@ -370,6 +397,14 @@ return array(
     'admin.plugin.deactivated'       => 'Plugin deactivated',
     'admin.plugin.uninstall_failed'  => 'Plugin not found or deletion failed',
     'admin.plugin.uninstalled'       => 'Plugin deleted',
+    'admin.plugin.zip_required'      => 'Please select a zip file to upload',
+    'admin.plugin.zip_no_main'       => 'Main file ({slug}.php) not found in the plugin package',
+    'admin.plugin.main_file_invalid' => 'No valid plugin main file found in the package ({slug}.php with a Plugin Name header required)',
+    'admin.plugin.name_mismatch'     => 'The Plugin Name in the package differs from the existing plugin; overwrite rejected',
+    'admin.plugin.uploaded'          => 'Plugin uploaded: %s',
+    'admin.plugin.updated'           => 'Plugin overwritten and updated: %s',
+    'admin.plugin.upload_title'      => 'Upload plugin (zip; the package must contain a {slug}.php main file declaring Plugin Name)',
+    'admin.plugin.upload_tip'        => 'A plugin with the same name will be overwritten (old directory backed up automatically, rollback on failure). Server upload limit approx. %sMB; program limit 10MB.',
 
     /* ---------- Audit log center (extra) ---------- */
     'admin.log.all_categories'  => 'All categories',

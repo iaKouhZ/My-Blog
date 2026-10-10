@@ -90,9 +90,9 @@ class AdminUser
             redirect(site_base_admin('user/edit'));
         }
         $password = self::generateStrongPassword();
-        $err = Auth::validate_password_strength($password, $username);
-        if ($err !== '') {
-            flash_set('error', admin_t('admin.user.gen_pwd_error', array($err)));
+        $pwdCode = Auth::validate_password_strength_code($password, $username);
+        if ($pwdCode !== '') {
+            flash_set('error', admin_t('admin.user.gen_pwd_error', array(admin_t('admin.auth.' . $pwdCode))));
             redirect(site_base_admin('user/edit'));
         }
         // 前置唯一性查重存在并发窗口（TOCTOU）：撞唯一索引时捕获重复键异常转为友好提示，
@@ -115,7 +115,7 @@ class AdminUser
         } catch (PDOException $ex) {
             if ($ex->getCode() === '23000') {
                 blog_log('user', 'user.create', 'fail', array('username' => $username, 'reason' => 'duplicate'));
-                flash_set('error', '用户名/邮箱/手机号已被占用（并发冲突），请重试');
+                flash_set('error', admin_t('admin.user.concurrent_conflict'));
                 redirect(site_base_admin('user/edit'));
             }
             throw $ex;
@@ -202,9 +202,9 @@ class AdminUser
 
         // 管理员重置密码（可选）
         if ($newPassword !== '') {
-            $err = Auth::validate_password_strength($newPassword, $user['username']);
-            if ($err !== '') {
-                flash_set('error', $err);
+            $pwdCode = Auth::validate_password_strength_code($newPassword, $user['username']);
+            if ($pwdCode !== '') {
+                flash_set('error', admin_t('admin.auth.' . $pwdCode));
                 redirect(site_base_admin('user/edit&id=' . $id));
             }
             DB::update('users', array(

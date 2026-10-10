@@ -64,6 +64,31 @@ return array(
     /* ---------- 登录/会话 ---------- */
     'admin.auth.logout'       => '登出',
     'admin.auth.pwd_expired'  => '密码已过期，请先修改密码',
+    // 以下 8 键对应 Auth::msgOf 机器码（服务层只产出机器码，显示层按域映射）
+    'admin.auth.pwd_len'          => '密码长度必须为 8-64 位',
+    'admin.auth.pwd_classes'      => '密码必须包含大写字母、小写字母、数字、特殊字符中的至少三类',
+    'admin.auth.pwd_contain_name' => '密码中不得包含用户名',
+    'admin.auth.pwd_weak'         => '密码过于简单，命中弱口令黑名单',
+    'admin.auth.user_not_found'   => '用户不存在',
+    'admin.auth.old_password_wrong' => '原密码错误',
+    'admin.auth.pwd_history_hit'  => '新密码不能与最近 %s 次密码相同',
+    'admin.auth.pwd_changed'      => '密码修改成功',
+
+    /* ---------- zip 上传链路（对应 ZipSafe::msgOf 机器码） ---------- */
+    'admin.zipsafe.upload_server_limit'   => '文件超过服务器上传限制（约 %sMB）',
+    'admin.zipsafe.upload_no_file'        => '请选择要上传的 zip 文件（错误码 %s）',
+    'admin.zipsafe.zip_too_large'         => 'zip 文件不得超过 %sMB',
+    'admin.zipsafe.zip_ext_only'          => '仅支持 .zip 格式',
+    'admin.zipsafe.zip_no_ziparchive'     => '服务器未启用 ZipArchive 扩展，无法解压 zip 包',
+    'admin.zipsafe.zip_open_failed'       => 'zip 文件无法打开',
+    'admin.zipsafe.zip_illegal_path'      => 'zip 包含非法路径条目',
+    'admin.zipsafe.zip_entry_denied'      => 'zip 包含不允许的条目：%s',
+    'admin.zipsafe.zip_entry_type_denied' => 'zip 包含不允许的条目类型（符号链接等）：%s',
+    'admin.zipsafe.zip_missing_required'  => 'zip 包缺少必需的文件',
+    'admin.zipsafe.zip_extract_failed'    => 'zip 解压失败',
+    'admin.zipsafe.dest_create_failed'    => '目标目录创建失败',
+    'admin.zipsafe.backup_failed'         => '旧目录备份失败，已中止覆盖',
+    'admin.zipsafe.swap_failed'           => '新目录替换失败，已回滚',
 
     /* ---------- 站点/安全/导航设置 ---------- */
     'admin.setting.site_name'              => '站点名称',
@@ -262,6 +287,7 @@ return array(
     'admin.user.email_taken'           => '邮箱已被占用',
     'admin.user.phone_taken'           => '该手机号已被占用',
     'admin.user.gen_pwd_error'         => '初始密码生成异常：%s',
+    'admin.user.concurrent_conflict'   => '用户名/邮箱/手机号已被占用（并发冲突），请重试',
     'admin.user.created_with_pwd'      => '用户已创建。初始密码（仅显示一次，请通过安全渠道告知用户）：%s',
     'admin.user.operator_pwd_required' => '重置密码或修改邮箱/手机须填写您（操作者）的当前密码',
     'admin.user.self_protect'          => '不能禁用或变更自己的角色',
@@ -352,6 +378,7 @@ return array(
     'admin.theme.updated'           => '主题已覆盖更新：%s',
     'admin.theme.no_overwrite_active' => '不能覆盖更新当前启用的主题，请先切换到其他主题',
     'admin.theme.name_mismatch'     => '包内 Theme Name 与现有主题不一致，已拒绝覆盖',
+    'admin.theme.upload_tip'        => '同名主题将执行覆盖更新（旧目录自动备份、失败回滚）；启用中的主题与 default 不可覆盖。服务器上传上限约 %sMB，程序限制 10MB。',
 
     /* ---------- 插件管理 ---------- */
     'admin.plugin.orphan_tip'        => '以下插件的目录已不存在（可能被直接删除而非经后台卸载），但其配置与数据仍残留在数据库中：',
@@ -370,6 +397,14 @@ return array(
     'admin.plugin.deactivated'       => '插件已禁用',
     'admin.plugin.uninstall_failed'  => '插件不存在或删除失败',
     'admin.plugin.uninstalled'       => '插件已删除',
+    'admin.plugin.zip_required'      => '请选择要上传的 zip 文件',
+    'admin.plugin.zip_no_main'       => '插件包内未找到主文件（{slug}.php）',
+    'admin.plugin.main_file_invalid' => '包内未找到合法插件主文件（{slug}.php 且头部须声明 Plugin Name）',
+    'admin.plugin.name_mismatch'     => '包内 Plugin Name 与现有插件不一致，已拒绝覆盖',
+    'admin.plugin.uploaded'          => '插件已上传：%s',
+    'admin.plugin.updated'           => '插件已覆盖更新：%s',
+    'admin.plugin.upload_title'      => '上传插件（zip，包内须含 {slug}.php 主文件并声明 Plugin Name）',
+    'admin.plugin.upload_tip'        => '同名插件将执行覆盖更新（旧目录自动备份、失败回滚）；服务器上传上限约 %sMB，程序限制 10MB。',
 
     /* ---------- 日志中心（补充） ---------- */
     'admin.log.all_categories'  => '全部类别',

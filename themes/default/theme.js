@@ -114,13 +114,16 @@
 
     /**
      * 危险操作表单二次确认（.confirm-submit）：文章页 CSP 仅允许 self 脚本，
-     * 无法使用内联 onsubmit，故在此统一委托处理
+     * 无法使用内联 onsubmit，故在此统一委托处理；
+     * 兜底文案取 body[data-confirm-default]（模板经 data 属性注入，避开 CSP 内联限制）
      */
     function initConfirmForms() {
         document.addEventListener('submit', function (ev) {
             var form = ev.target;
             if (form.classList && form.classList.contains('confirm-submit')) {
-                var msg = form.getAttribute('data-confirm') || '确认执行该操作？';
+                var msg = form.getAttribute('data-confirm')
+                    || document.body.getAttribute('data-confirm-default')
+                    || '确认执行该操作？';
                 if (!window.confirm(msg)) {
                     ev.preventDefault();
                 }
@@ -269,14 +272,15 @@
             return;
         }
 
-        // 构建目录树：h3 归入上一个 h2 的子表，孤立的 h3 自成顶层
+        // 构建目录树：h3 归入上一个 h2 的子表，孤立的 h3 自成顶层；
+        // 面板文案取按钮 data-toc-label/title（模板注入，避开文章页 CSP 内联限制）
         var panel = document.createElement('nav');
         panel.className = 'toc-panel';
         panel.id = 'toc-panel';
-        panel.setAttribute('aria-label', '文章目录');
+        panel.setAttribute('aria-label', btn.getAttribute('data-toc-label') || '文章目录');
         var title = document.createElement('div');
         title.className = 'toc-title';
-        title.textContent = '目录';
+        title.textContent = btn.getAttribute('data-toc-title') || '目录';
         panel.appendChild(title);
         var rootList = document.createElement('ul');
         rootList.className = 'toc-list';

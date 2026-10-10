@@ -118,7 +118,7 @@ class AdminProfile
         }
         $result = Auth::changePassword(Auth::id(), $oldPassword, $newPassword);
         if (!$result['ok']) {
-            flash_set('error', $result['msg']);
+            flash_set('error', admin_t('admin.auth.' . $result['code'], $result['args']));
             redirect(site_base_admin('profile/password'));
         }
         if ($wasExpired) {

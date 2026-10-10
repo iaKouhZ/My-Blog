@@ -42,17 +42,7 @@ class Lang
             // 双侧均缺失：原样返回 key，便于排查遗漏
             $text = $key;
         }
-        if (!empty($args)) {
-            // 顺序替换 %s（%% 转义为 %）；参数不足时保留原占位符，不抛警告
-            $i = 0;
-            $text = preg_replace_callback('/%%|%s/', function ($m) use ($args, &$i) {
-                if ($m[0] === '%%') {
-                    return '%';
-                }
-                return isset($args[$i]) ? (string) $args[$i++] : $m[0];
-            }, $text);
-        }
-        return $text;
+        return msg_format($text, $args);
     }
 
     /**

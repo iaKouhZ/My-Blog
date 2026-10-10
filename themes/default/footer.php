@@ -35,15 +35,15 @@ defined('APP_BOOT') or exit;
     <?php endif; ?>
     <div class="footer-account">
         <?php if (Auth::check()): ?>
-        <a href="<?php echo e(site_base_admin()); ?>">进入后台</a> ·
+        <a href="<?php echo e(site_base_admin()); ?>"><?php echo e(theme_t('theme.footer.admin')); ?></a> ·
         <form method="post" action="<?php echo e(Router::url('logout')); ?>" class="footer-logout-form">
             <?php echo Csrf::field(); ?>
-            <button type="submit" class="footer-logout">登出</button>
+            <button type="submit" class="footer-logout"><?php echo e(theme_t('theme.footer.logout')); ?></button>
         </form>
         <?php else: ?>
-        <a href="<?php echo e(Router::url('login')); ?>">登录</a>
+        <a href="<?php echo e(Router::url('login')); ?>"><?php echo e(theme_t('theme.footer.login')); ?></a>
         <?php if (Option::get('register_disabled', '0') !== '1'): ?>
-        · <a href="<?php echo e(Router::url('register')); ?>">注册</a>
+        · <a href="<?php echo e(Router::url('register')); ?>"><?php echo e(theme_t('theme.footer.register')); ?></a>
         <?php endif; ?>
         <?php endif; ?>
     </div>
@@ -53,7 +53,7 @@ defined('APP_BOOT') or exit;
 </div><!-- /.site-wrapper -->
 
 <?php // 回到顶部：全站通用悬浮钮，滚动超过阈值后由 theme.js 显示 ?>
-<button type="button" class="back-to-top" id="back-to-top" aria-label="回到顶部" title="回到顶部">
+<button type="button" class="back-to-top" id="back-to-top" aria-label="<?php echo e(theme_t('theme.common.back_to_top')); ?>" title="<?php echo e(theme_t('theme.common.back_to_top')); ?>">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
 </button>
 

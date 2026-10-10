@@ -119,8 +119,8 @@ class AdminTheme
         }
         $file = $_FILES['theme_zip'];
         $err = ZipSafe::uploadError($file, 10 * 1024 * 1024);
-        if ($err !== '') {
-            flash_set('error', $err);
+        if ($err !== null) {
+            flash_set('error', admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('theme/list'));
         }
 
@@ -141,18 +141,20 @@ class AdminTheme
 
         $zip = null;
         $err = ZipSafe::openChecked($file['tmp_name'], '#(^|/)style\.css$#', $zip);
-        if ($err !== '') {
+        if ($err !== null) {
             blog_log('template', $isUpdate ? 'theme.update' : 'theme.upload', 'fail', array(
-                'theme' => $target, 'reason' => $err,
+                'theme' => $target, 'reason' => $err['code'],
             ));
-            flash_set('error', $err === 'zip 包缺少必需的文件' ? admin_t('admin.theme.zip_no_style') : $err);
+            flash_set('error', $err['code'] === 'zip_missing_required'
+                ? admin_t('admin.theme.zip_no_style')
+                : admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('theme/list'));
         }
 
         $tmp = '';
         $err = ZipSafe::extractToTemp($zip, APP_ROOT . '/themes', $tmp);
-        if ($err !== '') {
-            flash_set('error', $err);
+        if ($err !== null) {
+            flash_set('error', admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('theme/list'));
         }
         // 扁平化后 style.css 必须落在根目录，否则主题无法被发现
@@ -174,11 +176,11 @@ class AdminTheme
         }
 
         $err = ZipSafe::swapIn($tmp, $dest);
-        if ($err !== '') {
+        if ($err !== null) {
             blog_log('template', $isUpdate ? 'theme.update' : 'theme.upload', 'fail', array(
-                'theme' => $target, 'reason' => $err,
+                'theme' => $target, 'reason' => $err['code'],
             ));
-            flash_set('error', $err);
+            flash_set('error', admin_t('admin.zipsafe.' . $err['code'], $err['args']));
             redirect(site_base_admin('theme/list'));
         }
         blog_log('template', $isUpdate ? 'theme.update' : 'theme.upload', 'success', array(

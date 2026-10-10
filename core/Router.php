@@ -108,6 +108,11 @@ class Router
         // 注意：不提供独立的验证码核验（预检）路由——验证码对错不向前端暴露，
         // 仅在表单提交时由服务端一次性裁决，防止有效性探测
 
+        // 前台语言切换 /lang/{code}（GET，仅写 cookie 偏好，不改服务端状态）
+        if (preg_match('#^lang/([a-z]{2}_[A-Z]{2})$#', $path, $m)) {
+            return array('route' => 'lang_switch', 'params' => array('code' => $m[1]));
+        }
+
         // 未知路径默认 404；先经 route_parse 过滤器，插件可认领自定义路由
         // （如 OAuth 回调、Webhook），回调签名：($route, $path)
         return apply_filters('route_parse', array('route' => '404', 'params' => array()), $path);
@@ -147,7 +152,7 @@ class Router
     /**
      * 站内 URL 统一生成入口
      *
-     * @param string $name   路由名 home/post/category/author/page/search/login/register/forgot/logout
+     * @param string $name   路由名 home/post/category/author/page/search/login/register/forgot/logout/lang_switch
      * @param array  $params 参数
      * @return string
      */
@@ -160,6 +165,9 @@ class Router
             if ($name === 'search' && isset($params['q'])) {
                 $url .= '?q=' . urlencode($params['q']);
             }
+            if ($name === 'lang_switch' && isset($params['redirect'])) {
+                $url .= '?redirect=' . urlencode($params['redirect']);
+            }
             return $url;
         }
         // 回退模式：index.php?r=...
@@ -170,6 +178,9 @@ class Router
         $extra = '';
         if ($name === 'search' && isset($params['q'])) {
             $extra = '&q=' . urlencode($params['q']);
+        }
+        if ($name === 'lang_switch' && isset($params['redirect'])) {
+            $extra .= '&redirect=' . urlencode($params['redirect']);
         }
         return $base . '/index.php?r=' . rawurlencode($r) . $extra;
     }
@@ -222,6 +233,8 @@ class Router
                 return '/comment/delete';
             case 'verify_send':
                 return '/verify/send';
+            case 'lang_switch':
+                return '/lang/' . $params['code'];
             case 'admin':
                 $m = isset($params['m']) ? $params['m'] : '';
                 return site_base_admin($m);

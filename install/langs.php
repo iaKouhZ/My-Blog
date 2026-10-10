@@ -52,6 +52,8 @@ return array(
         'install.db.next'                => '下一步：管理员信息',
         'install.db.connect_ok'          => '数据库连接成功',
         'install.db.connect_fail'        => '数据库连接失败：',
+'install.db.host_invalid'        => '数据库主机名包含非法字符',
+'install.db.name_invalid'        => '数据库名包含非法字符',
 
         /* ---------- 步骤三：管理员 ---------- */
         'install.admin.need_db'          => '请先完成数据库配置',
@@ -70,6 +72,10 @@ return array(
         'install.admin.submit'           => '开始安装',
         'install.admin.username_invalid' => '用户名为 3-32 位字母、数字或下划线',
         'install.admin.password_mismatch'=> '两次输入的密码不一致',
+'install.auth.pwd_len'          => '密码长度必须为 8-64 位',
+'install.auth.pwd_classes'      => '密码必须包含大写字母、小写字母、数字、特殊字符中的至少三类',
+'install.auth.pwd_contain_name' => '密码中不得包含用户名',
+'install.auth.pwd_weak'         => '密码过于简单，命中弱口令黑名单',
         'install.admin.email_invalid'    => '邮箱格式不正确',
         'install.admin.phone_invalid'    => '手机号格式不正确',
 
@@ -133,6 +139,8 @@ return array(
         'install.db.next'                => 'Next: Administrator',
         'install.db.connect_ok'          => 'Database connection succeeded',
         'install.db.connect_fail'        => 'Database connection failed: ',
+'install.db.host_invalid'        => 'The database host contains illegal characters',
+'install.db.name_invalid'        => 'The database name contains illegal characters',
 
         /* ---------- Step 3: administrator ---------- */
         'install.admin.need_db'          => 'Please complete the database configuration first',
@@ -151,6 +159,10 @@ return array(
         'install.admin.submit'           => 'Install',
         'install.admin.username_invalid' => 'Username must be 3-32 letters, digits or underscores',
         'install.admin.password_mismatch'=> 'The two passwords do not match',
+'install.auth.pwd_len'          => 'Password must be 8-64 characters',
+'install.auth.pwd_classes'      => 'Password must contain at least 3 of: uppercase letters, lowercase letters, digits, special characters',
+'install.auth.pwd_contain_name' => 'Password must not contain the username',
+'install.auth.pwd_weak'         => 'Password is too simple (weak password blacklist hit)',
         'install.admin.email_invalid'    => 'Invalid email format',
         'install.admin.phone_invalid'    => 'Invalid phone number format',
 

@@ -9,7 +9,10 @@
 ```
 plugins/
 └── hello-world/
-    └── hello-world.php    ← 主文件（必需）
+    ├── hello-world.php    ← 主文件（必需）
+    └── langs/             ← 语言包（可选，见 §4.3；zh_CN.php 为基线）
+        ├── zh_CN.php
+        └── en_US.php
 ```
 
 - `slug` 只允许小写字母、数字、连字符（`[a-z0-9-]{1,64}`）。
@@ -137,6 +140,7 @@ URL 生成需兼容伪静态开关：开启时 `Router::base() . '/my-callback'`
 | `register_verify_provider($channel)` | 声明验证码渠道能力（仅插件加载期可调，强制归属当前插件） |
 | `get_verify_provider($channel)` | 查询渠道声明者 slug（未声明返回 null） |
 | `register_plugin_page($slug, $title, $callback)` | 注册后台设置页（在 `admin_menu` 钩子中调用） |
+| `plugin_t($slug, $key, $args, $default, $lang)` | 插件文案翻译（见 §4.3 插件多语言约定） |
 | `input_password($key, $default, $maxLen)` | 口令/密钥专用输入校验器（原样透传不 trim 不过滤，仅字符串化与长度上限；AccessKeySecret、SMTP 授权码等一律经它读取，禁止直读 `$_POST`） |
 
 其他可用内核 API：`add_action/add_filter`、`e()`、`Router::url()`、`Option::get()`、
@@ -176,6 +180,24 @@ URL 生成需兼容伪静态开关：开启时 `Router::base() . '/my-callback'`
    `plugin_data` 行或 `plugin_{slug}_*` 选项的插件，提供「清理残留数据」
    按钮（`plugin/cleanup_orphan`，管理员权限 + CSRF + 审计留痕），
    复用卸载回收逻辑全量清理。
+
+### 4.3 插件多语言约定（plugin_t）
+
+插件用户可见文案一律经 `plugin_t($slug, $key, $args, $default, $lang)` 输出，
+语言包随插件目录自带，不占用内核/后台语言包命名空间：
+
+- **目录约定**：`plugins/{slug}/langs/zh_CN.php`（中文基线，**必备**）与可选
+  `plugins/{slug}/langs/{xx_XX}.php`；文件为可执行 PHP（`return array(...)`），
+  文件头必须带 `defined('APP_BOOT') or exit;` 守卫，可含 `_name` 显示名键。
+- **查找顺序**：当前语言插件包 → 插件 zh_CN 基线 → `$default`（中文缺省，调用点
+  建议始终给出，保证语言包缺失时可运行）→ 原样返回键名（便于排查遗漏）。
+- **语言选择**：缺省取站点默认语言（`admin_locale`，即后台/外发邮件语言）；
+  可用第 5 参 `$lang` 强制指定语言码。外发邮件（如验证码邮件）**必须**使用站点
+  默认语言，禁止跟随请求者浏览器语言。
+- **占位参数**：与内核一致，使用 `%s` 位置占位（`msg_format` 格式化）。
+- **zip 上传安装**：`langs/` 目录随插件包一并上传，无需额外登记。
+
+随包插件 `smtp-mailer` 为完整参考实现（`aliyun-sms`/`qq-login` 面向国内服务，文案保持中文硬编码，不做多语言）。
 
 ## 5. 后台设置页
 
@@ -224,8 +246,10 @@ function hello_world_page()
   然后返回 `true`；返回其它值视为未接管。
 - 核验：`($result=null, $scene, $target, $code, $channel)`。返回 `bool` 即接管；
   返回 `null` 回退本地 `verify_codes` 表核验。
-  **接管核验的插件必须自行实现等价安全策略**（错误次数控制、有效期、
-  审计留痕），此项为契约责任，内核无法运行时强制。
+  本地核验与发送共用 `vsend_` 目标命名锁（渠道 + 小写归一后的目标），错误计数原子递增，
+  仅裁决该场景/渠道/目标的最新记录；最新码消费、作废或过期后不得回退旧码。
+  **接管核验的插件必须自行实现等价安全策略**（并发错误次数控制、有效期、
+  最新码裁决、一次性消费、审计留痕），此项为契约责任，内核无法运行时强制。
 - **错误容忍次数归声明者插件管理**：内核本地表核验时按渠道声明读取
   `plugin_option($声明者, 'max_attempts', 2)`（范围 1-5 由内核钳制，缺省 2），
   错误达到上限即置 `used=1` 作废。验证码发送插件应在自己的设置页提供该配置项。
@@ -235,7 +259,7 @@ function hello_world_page()
 ## 7. 安全要求（违反将造成系统级漏洞）
 
 1. 所有输出必须 `e()` 转义；富文本须白名单过滤。
-2. 不得绕过 CSRF（内核已对后台 POST 统一校验，插件设置页无需重复实现，但不得自建旁路表单）。
+2. 不得绕过 CSRF（内核对后台写入动作强制 POST 并统一校验；插件设置页仍允许 GET 渲染，写入必须在 POST 分支执行，不得自建旁路表单）。
 3. 日志不得含明文密码、验证码、密钥、授权码；邮箱/手机号必须脱敏（detail 中键名为 `content` 的业务正文快照除外，保留原文以满足取证一致性）。
 4. 不得引入 Composer 依赖与运行时 CDN 资源。
 5. PHP 7.4 语法兼容（允许箭头函数、`??=` 等 7.4 特性；禁止仅 8.0+ 支持的语法/函数）。
@@ -253,6 +277,8 @@ function hello_world_page()
 
 - `plugins/hello-world/hello-world.php`：钩子与设置页基础用法。
 - `plugins/qq-login/`：自定义路由（OAuth 回调）、登录页/个人资料页钩子注入、
-  `plugin_data` 用户级绑定存储、限流与 state 防伪的完整实战。
+  `plugin_data` 用户级绑定存储、内核 IP 限流与 state 防伪的完整实战。
+  回调计数使用内核 `options.throttle_qq_callback_*`（每日惰性清理），绑定命名锁失败即拒绝写入；
+  旧版本 `plugin_data` 中的 `rl_*` 临时计数按既有到期清理机制回收，无需迁移。
 - `plugins/comment-guard/`：文章级评论三态管制——后台表单注入（`post_edit_fields`/`post_saved`）、
   服务端评论写拦截（`comment_write_allowed`）、前台条件渲染（`comment_area_state`）的组合实战。

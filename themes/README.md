@@ -23,6 +23,7 @@ themes/
     ├── forgot.php      ← 找回密码页
     ├── functions.php   ← 可选：主题自有钩子挂载与助手函数
     ├── settings.php    ← 可选：后台主题设置清单（声明式，内核据此渲染表单与校验保存）
+    ├── langs/          ← 可选：主题语言包（xx_XX.php；多语言约定见 §4.3）
     ├── js/             ← 可选：主题自有脚本子目录（主题静态资源一律随主题目录存放）
     ├── header.php      ← 可选：页头局部模板（Theme::part('header') 引入）
     ├── sidebar.php     ← 可选：侧边栏局部模板
@@ -123,6 +124,12 @@ Description: 主题描述（后台列表展示，截断 40 字）
 | `copyright_line()` | 页脚版权行 |
 | `Theme::assetsUrl($path)` | 主题静态资源 URL |
 | `Theme::part($name)` | 引入局部模板（如 `Theme::part('sidebar')`） |
+| `theme_t($key, $args, $default)` | 主题文案翻译（查询链：当前语言包 → 主题中文基线 → `$default` → 原样返回键，支持 `%s` 占位） |
+| `Theme::locale()` | 前台 `<html lang>` 属性值（BCP47，如 `zh-CN`/`en-US`） |
+| `Theme::langCode()` | 当前主题语言码（如 `zh_CN`） |
+| `Theme::availableLangs()` | 主题实有语言包列表（`code => 显示名`，语言切换器用） |
+| `Theme::langSwitchUrl($code)` | 语言切换链接（自动携带当前页地址作为回跳目标） |
+| `theme_date($datetime)` | 前台日期格式化（格式串随语言包 `theme.common.date_format` 切换，缺省中文格式） |
 | `json_out_script($data)` | 在 `<script>` 内输出 JSON 字面量的唯一允许方式（HEX 四标志转义 `<>&'"`，防 `</script>` 逃逸；禁止在模板里直接 `json_encode`） |
 
 站内链接一律用 `Router::url($route, $params)` 生成（如文章页
@@ -164,6 +171,44 @@ Description: 主题描述（后台列表展示，截断 40 字）
    重复挂载会浪费资源；对已渲染产物再渲染会把公式内容翻倍）；
 2. 主题不得在正文外再包一层 `.tex-block` / `.tex-inline` 容器，
    也不得对 `render_content()` 的输出做正则改写。
+
+### 4.3 主题多语言（i18n）
+
+主题可选配 `langs/` 目录实现多语言，参考实现 `themes/default/langs/`（中英双语）：
+
+```
+langs/
+├── zh_CN.php     ← 主题中文基线（随主题发布，最终降级方案，禁止删除）
+└── en_US.php     ← 英文包；缺键自动回退中文基线
+```
+
+- **包格式**：与后台语言包同规约——可执行 PHP（`return array(...)`），文件名
+  `xx_XX.php`（两位小写 + 下划线 + 两位大写），文件头必须带
+  `defined('APP_BOOT') or exit;` 守卫；`_name`（显示名）与 `_locale`
+  （BCP47，如 `en-US`）为包元信息键。`themes/` 下 PHP 已被三套重写规则
+  禁止直接执行，语言包无需额外防护配置。
+- **键规范**：`theme.{模块}.{语义}`（如 `theme.comment.submit`）；
+  值支持 `%s` 顺序占位（`%%` 转义字面量 `%`）。
+- **语言解析链**（每请求解析一次）：访客手动选择（`cb_theme_lang` cookie，
+  由语言切换链接 `/lang/{code}` 写入，优先级最高）→ 浏览器 `Accept-Language`
+  （按 q 值降序，先精确匹配 `en-US → en_US`，再按主标签族匹配 `en → 首个 en_*`；
+  仅匹配主题实有语言包，标头值不参与路径拼接）→ 后台 `admin_locale`
+  （主题存在同名包时沿用）→ `zh_CN`。
+- **模板用法**：可见文案一律 `e(theme_t('theme.xxx.yyy'))`；日期用
+  `theme_date($post['created_at'])`（格式串取包内 `theme.common.date_format`）；
+  `<html lang="<?php echo e(Theme::locale()); ?>">`。内核侧调用
+  （`paginate()`、Front 控制器消息）必带中文缺省参数——**无 `langs/` 目录的
+  主题行为与硬编码中文时期完全一致**，无需任何改造。
+- **语言切换器**：多于一个语言包时在侧边栏渲染（参考
+  `themes/default/sidebar.php` 的「语言」分组）：遍历 `Theme::availableLangs()`，
+  当前语言纯文本高亮，其余链接到 `Theme::langSwitchUrl($code)`。
+- **JS 文案**：无 CSP 的页面（login/register/forgot 等）可内联注入
+  `window.CB_*` 配置（经 `json_out_script()`；内核 `verify.js`/
+  `password_check.js` 分别读 `CB_VERIFY.msg`/`CB_PWD_LANG`，缺省保持中文，
+  参考 `themes/default/register.php`、`forgot.php`）；**文章页/独立页有受限
+  CSP（`script-src 'self'`）禁止内联脚本**，这些页面加载的脚本（如 `theme.js`）
+  文案须经元素 `data-*` 属性传递（参考 `single.php` 的 `#btn-toc` 与
+  `header.php` 的 `<body data-confirm-default>`）。
 
 ## 5. functions.php 与钩子
 

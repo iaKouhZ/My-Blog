@@ -16,21 +16,23 @@ $commentActionsOn = !empty($commentAreaState['actions']);
 
     <?php // 正文工具栏（hendrix 式）：返回 / 字号增减 / 打印，交互见 theme.js initArticleToolbar ?>
     <div class="article-toolbar">
-        <button type="button" class="toolbar-btn" id="btn-back" data-home="<?php echo e(Router::url('home')); ?>" title="返回上一页" aria-label="返回上一页">
+        <button type="button" class="toolbar-btn" id="btn-back" data-home="<?php echo e(Router::url('home')); ?>" title="<?php echo e(theme_t('theme.common.back')); ?>" aria-label="<?php echo e(theme_t('theme.common.back')); ?>">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         </button>
         <div class="toolbar-spacer"></div>
-        <?php // 目录按钮：宽屏（≥1500px）目录常驻故 CSS 隐藏此钮；正文无 h2/h3 时 JS 也会隐藏 ?>
-        <button type="button" class="toolbar-btn" id="btn-toc" title="文章目录" aria-label="文章目录" aria-expanded="false">
+        <?php // 目录按钮：宽屏（≥1500px）目录常驻故 CSS 隐藏此钮；正文无 h2/h3 时 JS 也会隐藏；
+        // data-toc-label/title 供 theme.js 动态创建目录面板时取文案（本页受限 CSP 禁内联脚本传参） ?>
+        <button type="button" class="toolbar-btn" id="btn-toc" title="<?php echo e(theme_t('theme.common.toc')); ?>" aria-label="<?php echo e(theme_t('theme.common.toc')); ?>"
+                data-toc-label="<?php echo e(theme_t('theme.common.toc')); ?>" data-toc-title="<?php echo e(theme_t('theme.common.toc_short')); ?>" aria-expanded="false">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
         </button>
-        <button type="button" class="toolbar-btn" id="btn-font-decrease" title="缩小字号" aria-label="缩小字号">
+        <button type="button" class="toolbar-btn" id="btn-font-decrease" title="<?php echo e(theme_t('theme.common.font_decrease')); ?>" aria-label="<?php echo e(theme_t('theme.common.font_decrease')); ?>">
             <span class="font-btn-inner">A</span><span class="font-btn-inner-small">A</span>
         </button>
-        <button type="button" class="toolbar-btn" id="btn-font-increase" title="放大字号" aria-label="放大字号">
+        <button type="button" class="toolbar-btn" id="btn-font-increase" title="<?php echo e(theme_t('theme.common.font_increase')); ?>" aria-label="<?php echo e(theme_t('theme.common.font_increase')); ?>">
             <span class="font-btn-inner">A</span><span class="font-btn-inner-large">A</span>
         </button>
-        <button type="button" class="toolbar-btn" id="btn-print" title="打印文章" aria-label="打印文章">
+        <button type="button" class="toolbar-btn" id="btn-print" title="<?php echo e(theme_t('theme.common.print_article')); ?>" aria-label="<?php echo e(theme_t('theme.common.print_article')); ?>">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
         </button>
     </div>
@@ -50,14 +52,14 @@ $commentActionsOn = !empty($commentAreaState['actions']);
                 <span><?php echo e($singlePost['author']['nickname']); ?></span>
                 <?php endif; ?>
                 <span class="meta-divider">·</span>
-                <span><?php echo e(date_fmt($singlePost['created_at'])); ?></span>
+                <span><?php echo e(theme_date($singlePost['created_at'])); ?></span>
                 <?php if (!empty($singlePost['category'])): ?>
                 <span class="meta-divider">·</span>
                 <a href="<?php echo e(Router::url('category', array('slug' => $singlePost['category']['slug']))); ?>"><?php echo e($singlePost['category']['name']); ?></a>
                 <?php endif; ?>
                 <span class="meta-divider">·</span>
-                <span>阅读 <?php echo (int) $singlePost['views']; ?></span>
-                <?php if ($singlePost['status'] !== 'published'): ?><span class="badge">未发布预览</span><?php endif; ?>
+                <span><?php echo e(theme_t('theme.common.read_count', array((int) $singlePost['views']))); ?></span>
+                <?php if ($singlePost['status'] !== 'published'): ?><span class="badge"><?php echo e(theme_t('theme.post.unpublished_preview')); ?></span><?php endif; ?>
             </div>
         </header>
         <?php // 首字下沉开关（主题设置 first_letter，默认开），样式见 style.css .drop-cap ?>
@@ -70,9 +72,9 @@ $commentActionsOn = !empty($commentAreaState['actions']);
     <?php if (!empty($commentAreaState['list'])): /* list=false 时评论区整体不渲染 */ ?>
     <?php do_action('comments_before', $singlePost); /* 插件注入点：评论区整体之前 */ ?>
     <section class="comments-area">
-        <h2 class="comments-title">评论 (<?php echo count($comments); ?>)</h2>
+        <h2 class="comments-title"><?php echo e(theme_t('theme.comment.title', array(count($comments)))); ?></h2>
         <?php if (empty($comments)): ?>
-        <p class="empty-tip">暂无评论。</p>
+        <p class="empty-tip"><?php echo e(theme_t('theme.comment.empty')); ?></p>
         <?php endif; ?>
 
         <?php
@@ -108,8 +110,8 @@ $commentActionsOn = !empty($commentAreaState['actions']);
                 echo '<input type="hidden" name="comment_id" value="' . $cid . '">';
                 echo '<textarea name="content" maxlength="2000" required>' . e($commentRow['content']) . '</textarea>';
                 echo '<div class="edit-actions">';
-                echo '<button class="submit" type="submit">保存</button>';
-                echo '<a class="comment-action-link" href="' . e($singlePostUrl) . '#comment-' . $cid . '">取消</a>';
+                echo '<button class="submit" type="submit">' . e(theme_t('theme.comment.save')) . '</button>';
+                echo '<a class="comment-action-link" href="' . e($singlePostUrl) . '#comment-' . $cid . '">' . e(theme_t('theme.comment.cancel')) . '</a>';
                 echo '</div></form></div>';
                 return;
             }
@@ -118,11 +120,11 @@ $commentActionsOn = !empty($commentAreaState['actions']);
                 // 伪静态回退模式下文章 URL 已含 ?r=，追加参数需改用 &
                 $sep = strpos($singlePostUrl, '?') === false ? '?' : '&';
                 echo '<div class="comment-actions">';
-                echo '<a class="comment-action-link" href="' . e($singlePostUrl . $sep . 'edit_comment=' . $cid) . '#comment-' . $cid . '">编辑</a>';
-                echo '<form class="comment-delete-form confirm-submit" data-confirm="确认删除这条评论？" method="post" action="' . e(Router::url('comment_delete')) . '">';
+                echo '<a class="comment-action-link" href="' . e($singlePostUrl . $sep . 'edit_comment=' . $cid) . '#comment-' . $cid . '">' . e(theme_t('theme.comment.edit')) . '</a>';
+                echo '<form class="comment-delete-form confirm-submit" data-confirm="' . e(theme_t('theme.comment.delete_confirm')) . '" method="post" action="' . e(Router::url('comment_delete')) . '">';
                 echo Csrf::field();
                 echo '<input type="hidden" name="comment_id" value="' . $cid . '">';
-                echo '<button class="comment-action-btn danger" type="submit">删除</button>';
+                echo '<button class="comment-action-btn danger" type="submit">' . e(theme_t('theme.comment.delete')) . '</button>';
                 echo '</form></div>';
             }
         };
@@ -133,9 +135,9 @@ $commentActionsOn = !empty($commentAreaState['actions']);
                 <div class="comment-author">
                     <img class="avatar" src="<?php echo e(avatar_url($c['author']['avatar'])); ?>" alt="">
                     <span><?php echo e($c['author']['nickname']); ?></span>
-                    <?php if ($c['status'] === 'pending'): ?><span class="badge">待审核</span><?php endif; ?>
+                    <?php if ($c['status'] === 'pending'): ?><span class="badge"><?php echo e(theme_t('theme.comment.pending_badge')); ?></span><?php endif; ?>
                 </div>
-                <div class="comment-meta"><?php echo e(date_fmt($c['created_at'])); ?></div>
+                <div class="comment-meta"><?php echo e(theme_date($c['created_at'])); ?></div>
                 <?php $renderCommentBody($c); ?>
                 <?php if (isset($childComments[(int) $c['id']])): ?>
                 <ul class="children">
@@ -144,9 +146,9 @@ $commentActionsOn = !empty($commentAreaState['actions']);
                         <div class="comment-author">
                             <img class="avatar" src="<?php echo e(avatar_url($reply['author']['avatar'])); ?>" alt="">
                             <span><?php echo e($reply['author']['nickname']); ?></span>
-                            <?php if ($reply['status'] === 'pending'): ?><span class="badge">待审核</span><?php endif; ?>
+                            <?php if ($reply['status'] === 'pending'): ?><span class="badge"><?php echo e(theme_t('theme.comment.pending_badge')); ?></span><?php endif; ?>
                         </div>
-                        <div class="comment-meta"><?php echo e(date_fmt($reply['created_at'])); ?></div>
+                        <div class="comment-meta"><?php echo e(theme_date($reply['created_at'])); ?></div>
                         <?php $renderCommentBody($reply); ?>
                     </li>
                     <?php endforeach; ?>
@@ -157,17 +159,19 @@ $commentActionsOn = !empty($commentAreaState['actions']);
         </ul>
 
         <?php if (!empty($commentAreaState['form'])): /* form=false 时隐藏发表框（评论只读态） */ ?>
-        <h3 class="comments-title">发表评论</h3>
+        <h3 class="comments-title"><?php echo e(theme_t('theme.comment.form_title')); ?></h3>
         <?php if (Auth::check()): ?>
         <form class="comment-form" method="post" action="<?php echo e(Router::url('comment_save')); ?>">
             <?php echo Csrf::field(); ?>
             <input type="hidden" name="post_id" value="<?php echo (int) $singlePost['id']; ?>">
             <input type="hidden" name="redirect" value="<?php echo e(Router::url('post', array('slug' => $singlePost['slug'] !== '' ? $singlePost['slug'] : (int) $singlePost['id'], 'id' => (int) $singlePost['id']))); ?>">
-            <p><textarea name="content" required placeholder="写下你的评论…"></textarea></p>
-            <p><button class="submit" type="submit">提交评论</button></p>
+            <p><textarea name="content" required placeholder="<?php echo e(theme_t('theme.comment.placeholder')); ?>"></textarea></p>
+            <p><button class="submit" type="submit"><?php echo e(theme_t('theme.comment.submit')); ?></button></p>
         </form>
         <?php else: ?>
-        <p class="form-hint"><a href="<?php echo e(Router::url('login')); ?>">登录</a>后才可以发表评论。</p>
+        <?php // %s 占位为登录链接：链接 HTML 由模板拼接（安全），语言包文本经 e() 转义后再替换 ?>
+        <?php $commentLoginLink = '<a href="' . e(Router::url('login')) . '">' . e(theme_t('theme.comment.login_link')) . '</a>'; ?>
+        <p class="form-hint"><?php echo str_replace('%s', $commentLoginLink, e(theme_t('theme.comment.login_to_comment'))); ?></p>
         <?php endif; ?>
         <?php endif; ?>
     </section>

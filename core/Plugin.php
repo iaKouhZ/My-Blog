@@ -396,6 +396,67 @@ function register_plugin_page($slug, $title, $callback)
 }
 
 /**
+ * 读取插件语言包：slug 与语言码白名单校验（防路径穿越），解析失败静默降级为空数组
+ *
+ * @param string $plugin 插件 slug
+ * @param string $code   语言码（xx_XX）
+ * @return array
+ */
+function plugin_lang_pack($plugin, $code)
+{
+    if (!preg_match('/^[a-z0-9][a-z0-9_-]*$/', $plugin) || !preg_match('/^[a-z]{2}_[A-Z]{2}$/', $code)) {
+        return array();
+    }
+    $file = APP_ROOT . '/plugins/' . $plugin . '/langs/' . $code . '.php';
+    if (!is_file($file)) {
+        return array();
+    }
+    $data = include $file;
+    return is_array($data) ? $data : array();
+}
+
+/**
+ * 插件文案翻译：插件自带语言包 plugins/{slug}/langs/{code}.php（return array(...)，
+ * 文件头须带 APP_BOOT 守卫），zh_CN.php 为必备基线。
+ * 查找顺序：当前语言插件包 → 插件 zh_CN 基线 → $default → 原样返回键名。
+ * 语言缺省取站点默认语言（Lang::code()，即 admin_locale），外发邮件等无请求上下文的
+ * 场景同样适用；可用 $lang 强制指定。
+ *
+ * @param string $plugin  插件 slug
+ * @param string $key     文案键
+ * @param array  $args    msg_format 位置参数（%s 占位）
+ * @param string $default 中文缺省（包内缺失时兜底，保证未附带语言包时可运行）
+ * @param string $lang    强制语言码（null 表示站点默认）
+ * @return string
+ */
+function plugin_t($plugin, $key, array $args = array(), $default = '', $lang = null)
+{
+    static $packs = array();
+    $code = ($lang !== null && $lang !== '') ? $lang : Lang::code();
+    if (!isset($packs[$plugin])) {
+        $packs[$plugin] = array();
+    }
+    if (!array_key_exists($code, $packs[$plugin])) {
+        $packs[$plugin][$code] = plugin_lang_pack($plugin, $code);
+    }
+    $text = null;
+    if (isset($packs[$plugin][$code][$key]) && is_string($packs[$plugin][$code][$key]) && $packs[$plugin][$code][$key] !== '') {
+        $text = $packs[$plugin][$code][$key];
+    } elseif ($code !== 'zh_CN') {
+        if (!array_key_exists('zh_CN', $packs[$plugin])) {
+            $packs[$plugin]['zh_CN'] = plugin_lang_pack($plugin, 'zh_CN');
+        }
+        if (isset($packs[$plugin]['zh_CN'][$key]) && is_string($packs[$plugin]['zh_CN'][$key]) && $packs[$plugin]['zh_CN'][$key] !== '') {
+            $text = $packs[$plugin]['zh_CN'][$key];
+        }
+    }
+    if ($text === null) {
+        $text = $default !== '' ? $default : $key;
+    }
+    return msg_format($text, $args);
+}
+
+/**
  * 获取已注册的插件设置页
  *
  * @return array

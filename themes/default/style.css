@@ -144,6 +144,12 @@ p { margin-bottom: 1.2em; }
 }
 .sidebar-menu a:hover { background-color: rgba(74, 124, 126, 0.08); color: var(--accent); padding-left: 14px; }
 
+/* 语言切换：当前语言为纯文本高亮（不可点击），其余为链接 */
+.sidebar-langs .lang-current {
+    display: block; padding: 6px 10px;
+    font-size: 15px; font-weight: 600; color: var(--accent);
+}
+
 /* 层级导航：父项（纯文本分组标签）+ 缩进子项 */
 .sidebar-menu .sidebar-menu-parent > span {
     display: block; padding: 6px 10px;

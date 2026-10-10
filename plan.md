@@ -63,6 +63,7 @@
 │       └── zh_CN.php      ← 后台中文基线语言包（所有语言的最终降级方案，禁止删除）
 ├── themes/
 │   └── default/           ← 默认模板（仿 qyqiu.cn），结构见 §10
+│       └── langs/         ← 主题语言包（zh_CN.php 中文基线随主题发布 + en_US.php 等；主题资源随主题目录存放，禁止放 assets/）
 ├── plugins/
 │   ├── smtp-mailer/       ← 预装 SMTP 发信插件（默认禁用）
 │   │   ├── smtp-mailer.php
@@ -149,7 +150,7 @@ id / name / slug UNIQUE / description / sort。
 | channel | ENUM('email','sms') |
 | expires_at | 10 分钟有效 |
 | used | TINYINT |
-| attempts | 错误尝试计数，≥5 作废 |
+| attempts | 错误尝试计数；上限由渠道声明者管理，缺省 2、内核钳制 1–5，达到上限立即作废 |
 | created_at | 用于 60s 重发间隔与每日上限判断 |
 
 ### 2.7 `{prefix}logs`（统一审计日志，等保二级）
@@ -186,6 +187,7 @@ id / name / slug UNIQUE / description / sort。
 | `/page/{slug}.html` | 独立页面（如"关于我"） |
 | `/search?q=...` | 搜索 |
 | `/login`、`/register`、`/forgot` | 认证表单页（前台模板渲染） |
+| `/lang/{code}` | 前台语言切换（GET，写 `cb_theme_lang` cookie 偏好后安全回跳；仅白名单语言码生效） |
 | `/user/...` | 后台（独立目录入口） |
 | `/install/...` | 安装程序 |
 
@@ -195,6 +197,7 @@ id / name / slug UNIQUE / description / sort。
 - 回退模式：未启用重写时 URL 为 `index.php?r=post/1.html`，由 install 自检或后台设置决定。
 - `.htaccess`：所有非真实文件/目录的请求重写至 `index.php`；同时屏蔽 `config.php`、`core/`、`assets/langs/`（语言包目录），并禁止 `plugins/`、`themes/` 下 PHP 文件直接执行（与 Nginx 规则对齐）。
 - `nginx.conf.example`：等价的 `try_files` + `location` 示例，含 `core/`、`config.php`、`assets/langs/` 拒绝访问规则。
+- 三套重写示例（含宝塔）统一拒绝隐藏文件/目录（如 `.git`）；Nginx 的隐藏路径正则须先于通用 PHP 处理规则，`^~ /uploads/` 内另设隐藏路径拦截，避免跳过外层正则。
 
 ---
 
@@ -220,6 +223,7 @@ id / name / slug UNIQUE / description / sort。
 ### 5.1 入口与身份
 - `/user/index.php` 为后台单一入口，内部按 `?m={module}/{action}` 分发（如 `?m=post/list`）。
 - 未登录访问任何后台页 → 302 到 `/login`（登录后回跳）。未登录身份 = **游客**，仅能浏览前台文章与已公开评论。
+- 页面动作按白名单允许 GET；其他后台动作仅接受 POST（非法方法返回 405），POST 统一校验 CSRF，防止 GET 触发缺省值覆盖配置。插件设置页 GET 仅用于展示，写入必须走 POST 分支。
 
 ### 5.2 能力点矩阵（`Auth::check_cap($cap)` 实现）
 | 能力 | 管理员 | 编辑 | 用户 | 游客 |
@@ -267,7 +271,7 @@ id / name / slug UNIQUE / description / sort。
 - options：`pwd_expire_enabled`（**默认 0=关闭**）、`pwd_expire_days`（默认 90，可配 30–365）。
 - 数据支撑：`users.password_changed_at`（安装/注册时初始化，每次改密更新）。
 - 启用后的行为（开关打开即生效，代码路径预留完整）：
-  - 登录成功后检查 `NOW() - password_changed_at > pwd_expire_days` → 会话标记 `pwd_expired=1`，强制跳转"修改密码"页，**改密完成前禁止访问其他任何后台页面**（路由层统一拦截）；
+  - `Auth::loginUser()` 对所有角色和登录通道（含管理员、QQ 登录）建立到期标记；`Auth::user()` 每请求按数据库中的 `password_changed_at` 重判，既有会话到期、管理员要求改密或开启策略时也立即生效 → `pwd_expired=1`，**改密完成前禁止访问其他任何后台页面**（路由层统一拦截并审计）；QQ 绑定/解绑同样拦截；
   - 到期前 7 天登录后显示一次性提醒；
   - 强制改密后清除标记并写审计日志（`category=auth, action=password.expired_change`）。
 - 管理员在用户管理可勾选"要求下次登录改密"：将目标用户 `password_changed_at` 置为过期阈值之前，复用同一拦截逻辑。
@@ -276,9 +280,10 @@ id / name / slug UNIQUE / description / sort。
 ### 6.3 登录失败处理与会话安全（等保二级·身份鉴别 c/d）
 - **锁定**：同一账号连续失败 `login_max_fail`（默认 5）次 → 锁定 `login_lock_minutes`（默认 10）分钟（`users.login_fail` / `locked_until` 持久化，重启不丢；失败计数经 SQL 原子自增——`LAST_INSERT_ID` 表达式模式，并发失败请求不会互相覆盖计数）；锁定期内直接拒绝；成功登录后清零。另按 IP 维度做二级限流（同一 IP 每分钟 ≤20 次登录尝试，独立计数器实现，不依赖审计表聚合；计数器读-改-写经 MySQL 命名锁互斥，IPv6 客户端按 /64 前缀归一计数防地址轮换）。锁定/禁用/封禁/注销等状态的登录失败与密码错误统一提示，防止账号枚举（具体原因仅写入审计日志）。
 
-> **已知设计妥协（当前版本）**：真实账号达到失败阈值时的"已锁定"提示仅会出现在存在的账号上，构成账号存在性侧信道（攻击者对同一名字连续失败至阈值，凭第 5 次提示差异探测账号是否存在）。曾实现"影子锁定"（对不存在账号名在 options 表维护同参数失败计数并返回相同话术），但因每个被喷洒的用户名都会在 options 表 mint 计数行——喷洒场景下无界增长、且 `Option::all()` 每请求全表加载放大开销——已回退。缓解因素：探测需把真实账号也打到锁定（对真实用户即自我惩罚）、单 IP 受 20 次/分钟限流钳制；待引入独立于 options 表的存储（如专用计数表或内存缓存）后再消除该侧信道。
+- **并发裁决与提示一致性**：用户名/邮箱解析为用户 ID 后取账号锁，锁内重读状态并完成失败计数、置锁或成功登录，防止旧快照清除并发生效的锁定。锁定触发的当次失败也统一为 `invalid_credentials`，仅审计保留锁定原因，不再依赖影子账号计数消除提示差异。IP 限流取锁后直接从数据库读取计数，不使用取锁前已加载的 Option 缓存；锁超时拒绝请求。
 - **审计**：登录成功、登录失败（含锁定触发）、登出、管理员手动解锁、验证码发送与核验，全部写 logs（`category=auth/verify`，`result=success/fail`）。
 - **会话**：无操作 `session_timeout_minutes`（默认 30）分钟自动失效；登出时 `session_destroy()` 并使 cookie 失效（剩余信息保护）；登录成功 `session_regenerate_id(true)`；检测到 HTTPS 时 cookie 自动加 `Secure`；会话携带口令指纹（口令哈希的二级散列），改密（自助/找回/管理员重置）后其余既有会话指纹失配自动失效。
+- 登录成功清除认证前 CSRF token，后续按新会话重新生成；检测到禁用/封禁/注销或指纹失配时清除会话身份及 token；登出同步清除当前请求用户缓存。仪表盘审计日志预览同样记录 `security/log.view`。
 
 ### 6.4 客户端 IP 获取策略（CDN 兼容，自定义标头默认不启用）
 站点经 CDN/边缘安全加速（如阿里云 ESA、DCDN、Cloudflare）回源时，`REMOTE_ADDR` 会变成 CDN 节点 IP，导致审计日志、登录锁定、IP 限流失真。为此提供统一 IP 获取机制：
@@ -350,6 +355,11 @@ id / name / slug UNIQUE / description / sort。
 写入类 API（`plugin_option_update`/`plugin_data_*`/`plugin_user_*`/`plugin_register_table`）受命名空间强制校验：内核按执行上下文（插件加载、钩子回调、设置页回调期间自动识别归属插件）拒绝跨插件写入，违规记 `security` 审计；读取不受限。
 验证码渠道能力声明：`register_verify_provider($channel)`（仅插件加载期可调、强制归属声明者）与 `get_verify_provider($channel)`；内核对验证码能力的探测与策略读取仅认声明，不硬编码插件名。
 
+本地验证码核验与发送共用 `vsend_` 目标锁（渠道 + 小写归一后的目标），防止邮箱大小写别名分到不同锁；错误计数原子递增，核验只裁决同场景/渠道/目标的最新记录，最新码消费、作废或过期后不得回退旧码。消费提交时复检 `used`、尝试次数与有效期，锁超时拒绝核验。接管 `verify_code_check` 的插件须自行实现相同的并发次数控制、最新码裁决与一次性消费契约。
+
+QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `ip_throttle_allow('qq_callback', 10)`，计数存于现有 options 的 `throttle_qq_callback_*`，IPv6 按 /64 归一。绑定 OpenID 查重与写入必须成功取得命名锁，否则拒绝写入；密码过期开启后，登录、绑定与解绑均服从内核到期判定。旧插件 `rl_*` 临时计数沿用既有到期清理，无需新增字段或迁移。
+插件多语言：`plugin_t($slug,$key,$args,$default,$lang)` + 插件自带 `langs/{xx_XX}.php`（zh_CN 基线必备、APP_BOOT 守卫），查找顺序为当前语言包 → 插件中文基线 → 中文缺省 → 键名；语言缺省取站点默认语言（`admin_locale`），外发邮件必须用站点默认语言。完整约定见 `plugins/README.md` §4.3。
+
 ### 7.5 插件管理页（仅管理员）
 列表（名称/版本/作者/描述/状态）、启用、禁用、删除（删除目录，二次确认）、插件设置页入口。插件文件必须位于 `plugins/` 且头部元数据合法才会被发现。
 支持后台上传插件 zip 安装：slug 由包内 `{slug}.php` 主文件推导（头部须含 `Plugin Name`），条目安全白名单与主题上传共用 `core/ZipSafe.php`；同名插件执行覆盖更新（`Plugin Name` 不一致拒绝、旧目录备份+失败回滚），审计记 `plugin.upload`/`plugin.update` 成败两类。
@@ -407,6 +417,7 @@ id / name / slug UNIQUE / description / sort。
 - **交互**：☾ 明暗主题切换（localStorage 记忆，跟随系统偏好为默认）；☰ 移动端折叠菜单；全站响应式。
 - **页面类型**：`index.php`（首页/列表）、`single.php`（文章详情 + 评论区 + 评论表单[登录可见]）、`page.php`（独立页面如"关于我"）、`archive.php`（分类/作者归档）、`search.php`、`404.php`。
 - **模板结构（仿 WP）**：`header.php`、`footer.php`、`sidebar.php`、`functions.php`（主题自己的钩子/助手）、`style.css`。
+- **主题多语言（i18n）**：语言包随主题放 `themes/{dir}/langs/xx_XX.php`（`return array(...)`，键规范 `theme.{模块}.{语义}`，`_name`/`_locale` 为包元信息），`langs/zh_CN.php` 为随主题发布的中文基线（最终降级方案，禁止删除）；模板与前台控制器文案经 `theme_t()` 查询（当前语言包 → 主题中文基线 → 中文缺省参数 → 原样返回键，支持 `%s` 占位）；语言解析链：访客 `cb_theme_lang` cookie（侧边栏语言切换器经 `/lang/{code}` 路由写入，HttpOnly+SameSite=Lax，HTTPS 下 Secure）→ 浏览器 `Accept-Language`（q 值降序，先精确后按主标签族匹配，仅白名单主题实有包）→ 后台 `admin_locale`（主题存在同名包时沿用）→ `zh_CN`；`<html lang>` 经 `Theme::locale()` 输出，日期格式经 `theme_date()` 随包内 `theme.common.date_format` 切换；主题 JS 文案在无 CSP 页面经 `window.CB_*` 内联注入（复用内核 verify.js/password_check.js 的覆盖机制），文章/独立页受受限 CSP 约束改走元素 `data-*` 属性传递。无 `langs/` 目录的主题行为与硬编码中文时期完全一致（内核侧 `theme_t` 调用必带中文缺省参数）。默认主题随包中英双语（`langs/zh_CN.php` + `langs/en_US.php`）。
 - **模板 API**：`site_name()`、`site_motto()`、`the_posts()`、`the_title()`、`the_date()`、`the_category()`、`the_excerpt()`、`the_content()`、`paginate()`、`comment_list()` 等；模板内禁止直接操作 DB。
 - **模板管理页**（仅管理员）：主题列表（读取 style.css 头部元数据：Theme Name/Author/Version/Description）、启用、禁用、删除；支持上传主题 zip 包（服务端校验后解压到 `themes/`），同名主题可覆盖更新（`Theme Name` 不一致拒绝；`default` 与启用中主题不可覆盖；旧目录备份+失败回滚），审计记 `theme.upload`/`theme.update` 成败两类。
 
@@ -491,6 +502,7 @@ id / name / slug UNIQUE / description / sort。
 | 10 | 收尾：模板/插件管理页完善、日志中心、.htaccess 与 nginx 示例、README | 全量 `php -l` 通过；全新环境按 README 可完成部署 |
 | 11 | 安全加固一轮（外部审计整改）：闪存 toast 转义 + `json_out_script()` 统一 `<script>` 内 JSON 输出；主题 zip 条目白名单（拒隐藏文件/phar/phtml/路径穿越，不拒 `.php` 模板）；口令/密钥统一经 `input_password()`；移除全部 `@` 抑制 | 恶意主题名不再触发存储型 XSS；危险条目 zip 被拒；全库无 `@`；口令字段无 `$_POST` 直读 |
 | 12 | 运行时升级 PHP 7.4+：安装自检/文档同步；会话 Cookie 改数组参数并全面启用 `SameSite=Lax`（含安装向导）；install 复用 `is_https()` | 7.4 环境下 Cookie 头含 `SameSite=Lax`；`HTTPS=off` 环境会话 Cookie 不误加 `Secure` |
+| 13 | 安全复审：后台写入强制 POST、并发登录/限流/验证码裁决、密码过期通道统一、会话身份清理、QQ 绑定锁失败拒绝、隐藏路径防护与审计补齐 | PHP 7.4 全量语法检查通过；旧码不再生效、并发错误计数不丢失、取锁失败不写入、开启后的管理员与第三方登录受过期拦截；三套重写配置阻断隐藏路径且正常静态资源可用 |
 
 ---
 

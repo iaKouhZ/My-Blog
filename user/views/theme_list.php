@@ -11,7 +11,7 @@ defined('APP_BOOT') or exit;
         <input type="file" name="theme_zip" accept=".zip" required>
         <button class="layui-btn" type="submit"><i class="layui-icon layui-icon-upload"></i> <?php echo e(admin_t('admin.common.upload')); ?></button>
     </form>
-    <p class="tip">同名主题将执行覆盖更新（旧目录自动备份、失败回滚）；启用中的主题与 default 不可覆盖。服务器上传上限约 <?php echo (int) floor($uploadLimit / 1048576); ?>MB，程序限制 10MB。</p>
+    <p class="tip"><?php echo e(admin_t('admin.theme.upload_tip', array((int) floor($uploadLimit / 1048576)))); ?></p>
 </div>
 
 <div class="card">

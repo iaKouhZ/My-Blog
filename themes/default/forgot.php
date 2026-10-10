@@ -8,7 +8,7 @@ Theme::part('header');
 <div id="content">
     <div class="auth-site-name"><a href="<?php echo e(Router::url('home')); ?>"><?php echo e(site_name()); ?></a></div>
     <div class="auth-card">
-        <h1>找回密码</h1>
+        <h1><?php echo e(theme_t('theme.auth.forgot_title')); ?></h1>
         <?php if ($info !== ''): ?>
         <div class="form-ok"><?php echo e($info); ?></div>
         <?php endif; ?>
@@ -20,42 +20,59 @@ Theme::part('header');
               data-pwd-check data-account="#forgotAccount">
             <?php echo Csrf::field(); ?>
             <p>
-                <label>用户名或邮箱</label>
+                <label><?php echo e(theme_t('theme.auth.account')); ?></label>
                 <input type="text" name="account" id="forgotAccount"
                        value="<?php echo e($account); ?>" required>
             </p>
-            <div class="form-hint">输入用户名时通过绑定手机发送短信；输入邮箱时通过邮箱发送验证码</div>
+            <div class="form-hint"><?php echo e(theme_t('theme.auth.forgot_hint')); ?></div>
             <p>
-                <label>验证码</label>
+                <label><?php echo e(theme_t('theme.auth.code')); ?></label>
                 <span class="verify-row">
                     <input type="text" name="code" maxlength="6" required>
                     <button type="button" class="btn-small" id="sendResetCode"
-                        data-scene="reset" data-channel="<?php echo $smsEnabled ? 'sms' : 'email'; ?>" data-target="#forgotAccount">发送验证码</button>
+                        data-scene="reset" data-channel="<?php echo $smsEnabled ? 'sms' : 'email'; ?>" data-target="#forgotAccount"><?php echo e(theme_t('theme.auth.send_code')); ?></button>
                 </span>
             </p>
             <p>
-                <label>新密码（8-64 位；大写字母/小写字母/数字/特殊字符至少三类；不得含用户名）</label>
+                <label><?php echo e(theme_t('theme.auth.new_password_label')); ?></label>
                 <input type="password" name="new_password" required minlength="8" maxlength="64">
             </p>
             <p>
-                <label>确认新密码</label>
+                <label><?php echo e(theme_t('theme.auth.confirm_new_password')); ?></label>
                 <input type="password" name="new_password2" required minlength="8" maxlength="64">
                 <?php // 二次确认实时反馈：一致/不一致由 password_check.js 填充 ?>
                 <span class="pwd-match" aria-live="polite"></span>
             </p>
-            <p class="form-actions"><button class="submit" type="submit">重置密码</button></p>
+            <p class="form-actions"><button class="submit" type="submit"><?php echo e(theme_t('theme.auth.reset_submit')); ?></button></p>
         </form>
         <?php else: ?>
-        <p class="form-hint">站点未启用邮箱或短信验证插件，无法在线找回密码，请联系管理员。</p>
+        <p class="form-hint"><?php echo e(theme_t('theme.auth.no_provider')); ?></p>
         <?php endif; ?>
         <?php do_action('auth_form_footer', 'forgot'); /* 插件注入点（找回表单下方），与登录/注册页同钩子不同页面参数 */ ?>
-        <div class="auth-links"><a href="<?php echo e(Router::url('login')); ?>">返回登录</a></div>
+        <div class="auth-links"><a href="<?php echo e(Router::url('login')); ?>"><?php echo e(theme_t('theme.auth.back_login')); ?></a></div>
     </div>
+    <?php // JS 文案注入：内核 verify.js 读 CB_VERIFY.msg、password_check.js 读 CB_PWD_LANG（缺省均保持中文） ?>
     <script>
     window.CB_VERIFY = {
         url: <?php echo json_out_script(Router::url('verify_send')); ?>,
-        csrf: <?php echo json_out_script(Csrf::token()); ?>
+        csrf: <?php echo json_out_script(Csrf::token()); ?>,
+        msg: <?php echo json_out_script(array(
+            'fill_target'   => theme_t('theme.js.verify_fill_target'),
+            'network_error' => theme_t('theme.js.verify_network_error'),
+            'retry_in'      => theme_t('theme.js.verify_retry_in'),
+            'send'          => theme_t('theme.js.verify_send'),
+        )); ?>
     };
+    window.CB_PWD_LANG = <?php echo json_out_script(array(
+        'need'          => theme_t('theme.js.pwd_need'),
+        'len'           => theme_t('theme.js.pwd_len'),
+        'classes'       => theme_t('theme.js.pwd_classes'),
+        'contain_name'  => theme_t('theme.js.pwd_contain_name'),
+        'match_ok'      => theme_t('theme.js.pwd_match_ok'),
+        'mismatch_live' => theme_t('theme.js.pwd_mismatch_live'),
+        'repeat'        => theme_t('theme.js.pwd_repeat'),
+        'mismatch'      => theme_t('theme.js.pwd_mismatch'),
+    )); ?>;
     </script>
     <script src="<?php echo e(assets_url('front/verify.js')); ?>"></script>
     <script src="<?php echo e(assets_url('front/password_check.js')); ?>"></script>

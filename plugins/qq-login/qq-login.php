@@ -309,21 +309,11 @@ function qq_login_handle_callback()
         redirect(Router::url('home'));
     }
 
-    // IP 维度限流：同一 IP 每分钟最多 10 次回调（防刷接口）；
-    // 读-判-写包进命名锁，避免并发回调互相覆盖计数（无锁读改写会少计）
-    $rateKey = 'rl_' . md5(client_ip());
-    $lockName = 'qqrl-' . substr(md5(client_ip()), 0, 24);
-    DB::lock($lockName, 3); // 未抢到锁放行处理：限流是防刷兜底，不做硬阻断
-    try {
-        $count = (int) plugin_data_get('qq-login', $rateKey, 0);
-        if ($count >= 10) {
-            plugin_log('qq-login.callback', array('result' => 'fail', 'reason' => 'rate_limited'));
-            flash_set('error', '操作过于频繁，请稍后再试');
-            redirect(Router::url('login'));
-        }
-        plugin_data_set('qq-login', $rateKey, $count + 1, 60);
-    } finally {
-        DB::unlock($lockName);
+    // 复用内核限流，锁超时必须拒绝；IPv6 按 /64 归一，防轮换地址绕过。
+    if (!ip_throttle_allow('qq_callback', 10)) {
+        plugin_log('qq-login.callback', array('result' => 'fail', 'reason' => 'rate_limited'));
+        flash_set('error', '操作过于频繁，请稍后再试');
+        redirect(Router::url('login'));
     }
 
     $code = input_text('code', '', 256, 'get');
@@ -367,12 +357,21 @@ function qq_login_do_bind($openid, $nickname)
         flash_set('error', '请先登录后再绑定 QQ');
         redirect(Router::url('login'));
     }
+    Auth::require_cap('edit_profile');
+    if (!empty($_SESSION['pwd_expired'])) {
+        blog_log('auth', 'password.expired', 'fail', array('source' => 'qq.bind'));
+        redirect(site_base_admin('profile/password'));
+    }
     $uid = Auth::id();
 
     // 一个 QQ 只能绑定一个账号：查重与写入必须串行——uk_lookup 唯一键不含 data_value，
     // DB 层无法兜底同一 openid 并发绑两个账号，故按 openid 维度加命名锁消除 TOCTOU
     $lockName = 'qqbind-' . md5($openid);
-    DB::lock($lockName, 5); // 未抢到锁放行：并发绑定是极小概率，硬阻断反而影响正常用户
+    if (!DB::lock($lockName, 5)) {
+        plugin_log('qq-login.bind', array('result' => 'fail', 'reason' => 'lock_timeout', 'user_id' => $uid));
+        flash_set('error', '操作过于频繁，请稍后再试');
+        redirect($profileUrl);
+    }
     try {
         $boundUid = qq_login_user_by_openid($openid);
         if ($boundUid > 0 && $boundUid !== $uid) {
@@ -443,6 +442,11 @@ function qq_login_handle_unbind()
     Csrf::verifyOrDie();
     if (!Auth::check()) {
         redirect(Router::url('login'));
+    }
+    Auth::require_cap('edit_profile');
+    if (!empty($_SESSION['pwd_expired'])) {
+        blog_log('auth', 'password.expired', 'fail', array('source' => 'qq.unbind'));
+        redirect(site_base_admin('profile/password'));
     }
     $uid = Auth::id();
     plugin_user_delete('qq-login', $uid, 'qq_openid');

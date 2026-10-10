@@ -49,24 +49,6 @@ function aliyun_sms_client($cfg = null)
     return new AliyunRpc($cfg['access_key_id'], $cfg['access_key_secret'], 'https://dypnsapi.aliyuncs.com');
 }
 
-/** 阿里云错误码 → 友好提示 */
-function aliyun_sms_error_message($code)
-{
-    $map = array(
-        'MOBILE_NUMBER_ILLEGAL' => '手机号格式不正确',
-        'BUSINESS_LIMIT_CONTROL' => '发送过于频繁，请稍后再试',
-        'FREQUENCY_FAIL' => '触发频率限制，请稍后再试',
-        'INVALID_PARAMETERS' => '参数不正确，请检查插件配置',
-        'FUNCTION_NOT_OPENED' => '阿里云号码认证服务未开通',
-        // 网关 HMAC 校验失败：几乎都是 AccessKeySecret 与 AccessKeyId 不匹配或含多余空白
-        'SignatureDoesNotMatch' => '接口签名校验失败：请核对 AccessKeySecret 与 AccessKeyId 是否匹配，重新粘贴时注意勿带空格/换行',
-    );
-    if (isset($map[$code])) {
-        return $map[$code];
-    }
-    return '短信发送失败（' . $code . '）';
-}
-
 /**
  * 发送验证码（channel=sms）：SendSmsVerifyCode 本地生成码模式
  * 内核生成的验证码直接经 TemplateParam 下发；官方文档明确该模式下

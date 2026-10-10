@@ -27,10 +27,35 @@ require APP_ROOT . '/core/Theme.php';
 function app_error_handler($errno, $errstr, $errfile, $errline)
 {
     error_log(sprintf('[blog] %s at %s:%d', $errstr, $errfile, $errline));
-    if (Option::get('debug', '0') === '1') {
+    if (app_debug_enabled()) {
         return false; // 调试模式交给默认输出
     }
     return true;
+}
+
+/**
+ * 读取 debug 开关：DB 不可用时 Option 查询会抛错，必须回退安全默认 0（不泄露）
+ */
+function app_debug_enabled()
+{
+    try {
+        return Option::get('debug', '0') === '1';
+    } catch (Throwable $ignored) {
+        return false;
+    }
+}
+
+/**
+ * 500 兜底文案：零依赖双语（异常时 DB 可能不可用，只读 Accept-Language 首语言族）
+ */
+function app_500_message()
+{
+    $al = isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? strtolower(trim($_SERVER['HTTP_ACCEPT_LANGUAGE'])) : '';
+    $first = trim(preg_replace('/;.*/', '', strtok($al, ',')));
+    if ($first !== '' && strpos($first, 'zh') !== 0) {
+        return 'Internal server error, please try again later.';
+    }
+    return '服务器内部错误，请稍后再试';
 }
 
 function app_exception_handler($ex)
@@ -39,10 +64,10 @@ function app_exception_handler($ex)
     if (!headers_sent()) {
         http_response_code(500);
     }
-    if (Option::get('debug', '0') === '1') {
+    if (app_debug_enabled()) {
         echo '<pre>' . e($ex->getMessage()) . '</pre>';
     } else {
-        echo '服务器内部错误，请稍后再试';
+        echo app_500_message();
     }
     exit;
 }

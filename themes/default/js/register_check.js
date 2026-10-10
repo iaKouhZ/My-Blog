@@ -10,6 +10,12 @@
         return;
     }
 
+    // 文案覆盖：主题语言包经 window.CB_REG_LANG 注入；缺省保持中文（与内核 CB_PWD_LANG 同风格）
+    var LANG = window.CB_REG_LANG || {};
+    function L(key, def) {
+        return LANG[key] || def;
+    }
+
     var username = document.getElementById('regUsername');
     var email = document.getElementById('regEmail');
     var emailCode = document.getElementById('regEmailCode');
@@ -58,10 +64,10 @@
     /** 密码强度：长度 8-64、四类字符至少三类、不含用户名（与后端口径一致） */
     function pwdError(v, name) {
         if (v === '') {
-            return '请输入密码';
+            return L('need_password', '请输入密码');
         }
         if (v.length < 8 || v.length > 64) {
-            return '密码长度须为 8-64 位';
+            return L('pwd_len', '密码长度须为 8-64 位');
         }
         var classes = 0;
         if (/[A-Z]/.test(v)) { classes++; }
@@ -69,10 +75,10 @@
         if (/[0-9]/.test(v)) { classes++; }
         if (/[^A-Za-z0-9]/.test(v)) { classes++; }
         if (classes < 3) {
-            return '密码须包含大写/小写/数字/特殊字符中的至少三类';
+            return L('pwd_classes', '密码须包含大写/小写/数字/特殊字符中的至少三类');
         }
         if (name !== '' && v.toLowerCase().indexOf(name.toLowerCase()) !== -1) {
-            return '密码不得包含用户名';
+            return L('pwd_contain_name', '密码不得包含用户名');
         }
         return '';
     }
@@ -83,30 +89,30 @@
         var name = username ? username.value.replace(/^\s+|\s+$/g, '') : '';
 
         if (input === username) {
-            if (v === '') { return '请输入用户名'; }
-            if (!/^[a-zA-Z0-9_]{3,32}$/.test(v)) { return '用户名为 3-32 位字母、数字或下划线'; }
+            if (v === '') { return L('need_username', '请输入用户名'); }
+            if (!/^[a-zA-Z0-9_]{3,32}$/.test(v)) { return L('username_invalid', '用户名为 3-32 位字母、数字或下划线'); }
         } else if (input === email) {
             // 邮箱可选，填写则校验格式
-            if (v !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { return '邮箱格式不正确'; }
+            if (v !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { return L('email_invalid', '邮箱格式不正确'); }
         } else if (input === emailCode) {
             // 邮箱验证码：填写了邮箱则必须填写
             var emailVal = email ? email.value.replace(/^\s+|\s+$/g, '') : '';
-            if (emailVal !== '' && v === '') { return '请填写邮箱验证码'; }
+            if (emailVal !== '' && v === '') { return L('need_email_code', '请填写邮箱验证码'); }
         } else if (input === phone) {
             // 短信插件启用时（smsCode 存在）手机号必填；否则填写才校验格式
             if (smsCode) {
-                if (v === '') { return '请输入手机号'; }
-                if (!/^1[3-9][0-9]{9}$/.test(v)) { return '手机号格式不正确'; }
+                if (v === '') { return L('need_phone', '请输入手机号'); }
+                if (!/^1[3-9][0-9]{9}$/.test(v)) { return L('phone_invalid', '手机号格式不正确'); }
             } else if (v !== '' && !/^1[3-9][0-9]{9}$/.test(v)) {
-                return '手机号格式不正确';
+                return L('phone_invalid', '手机号格式不正确');
             }
         } else if (input === smsCode) {
-            if (v === '') { return '请填写短信验证码'; }
+            if (v === '') { return L('need_sms_code', '请填写短信验证码'); }
         } else if (input === pwd) {
             return pwdError(v, name);
         } else if (input === pwd2) {
-            if (v === '') { return '请再次输入密码'; }
-            if (pwd && v !== pwd.value) { return '两次输入的密码不一致'; }
+            if (v === '') { return L('need_password2', '请再次输入密码'); }
+            if (pwd && v !== pwd.value) { return L('pwd_mismatch', '两次输入的密码不一致'); }
         }
         return '';
     }
@@ -120,10 +126,10 @@
             pwdMatch.textContent = '';
             pwdMatch.className = 'pwd-match';
         } else if (pwd2.value === pwd.value) {
-            pwdMatch.textContent = '两次输入一致 ✓';
+            pwdMatch.textContent = L('match_ok', '两次输入一致 ✓');
             pwdMatch.className = 'pwd-match ok';
         } else {
-            pwdMatch.textContent = '两次输入不一致';
+            pwdMatch.textContent = L('match_no', '两次输入不一致');
             pwdMatch.className = 'pwd-match err';
         }
     }

@@ -27,11 +27,11 @@ $authorInfo = site_author();
     <?php // 头像下方账号入口：未登录显示登录/注册，已登录显示仪表盘 ?>
     <div class="sidebar-auth">
         <?php if (Auth::check()): ?>
-        <a class="sidebar-auth-btn primary" href="<?php echo e(site_base_admin()); ?>">仪表盘</a>
+        <a class="sidebar-auth-btn primary" href="<?php echo e(site_base_admin()); ?>"><?php echo e(theme_t('theme.sidebar.dashboard')); ?></a>
         <?php else: ?>
-        <a class="sidebar-auth-btn primary" href="<?php echo e(Router::url('login')); ?>">登录</a>
+        <a class="sidebar-auth-btn primary" href="<?php echo e(Router::url('login')); ?>"><?php echo e(theme_t('theme.sidebar.login')); ?></a>
         <?php if (Option::get('register_disabled', '0') !== '1'): ?>
-        <a class="sidebar-auth-btn" href="<?php echo e(Router::url('register')); ?>">注册</a>
+        <a class="sidebar-auth-btn" href="<?php echo e(Router::url('register')); ?>"><?php echo e(theme_t('theme.sidebar.register')); ?></a>
         <?php endif; ?>
         <?php endif; ?>
     </div>
@@ -42,16 +42,16 @@ $authorInfo = site_author();
             <input type="hidden" name="r" value="search">
             <?php endif; ?>
             <label>
-                <span class="sidebar-site-description">搜索：</span>
-                <input type="search" class="search-field" placeholder="搜索..." name="q" value="">
+                <span class="sidebar-site-description"><?php echo e(theme_t('theme.sidebar.search_label')); ?></span>
+                <input type="search" class="search-field" placeholder="<?php echo e(theme_t('theme.sidebar.search_placeholder')); ?>" name="q" value="">
             </label>
         </form>
     </div>
 
     <div class="sidebar-section">
-        <h3 class="sidebar-section-title">导航</h3>
+        <h3 class="sidebar-section-title"><?php echo e(theme_t('theme.sidebar.nav')); ?></h3>
         <ul class="sidebar-menu">
-            <li><a href="<?php echo e(Router::url('home')); ?>">首页</a></li>
+            <li><a href="<?php echo e(Router::url('home')); ?>"><?php echo e(theme_t('theme.sidebar.home')); ?></a></li>
             <?php foreach (nav_pages() as $navPage): ?>
             <?php // 无别名的页面由 Router::url 回退数字 id 访问 ?>
             <li><a href="<?php echo e(Router::url('page', array('slug' => $navPage['slug'], 'id' => (int) $navPage['id']))); ?>"><?php echo e($navPage['title']); ?></a></li>
@@ -75,7 +75,7 @@ $authorInfo = site_author();
     </div>
 
     <div class="sidebar-section">
-        <h3 class="sidebar-section-title">分类</h3>
+        <h3 class="sidebar-section-title"><?php echo e(theme_t('theme.sidebar.category')); ?></h3>
         <ul class="sidebar-categories">
             <?php foreach (nav_categories() as $cat): ?>
             <li>
@@ -88,13 +88,32 @@ $authorInfo = site_author();
         </ul>
     </div>
 
+    <?php // 语言切换：仅在主题提供多于一个语言包时渲染；当前语言纯文本高亮，其余为切换链接 ?>
+    <?php $sidebarLangs = Theme::availableLangs(); ?>
+    <?php if (count($sidebarLangs) > 1): ?>
+    <div class="sidebar-section">
+        <h3 class="sidebar-section-title"><?php echo e(theme_t('theme.sidebar.language')); ?></h3>
+        <ul class="sidebar-menu sidebar-langs">
+            <?php foreach ($sidebarLangs as $sidebarLangCode => $sidebarLangName): ?>
+            <li>
+                <?php if ($sidebarLangCode === Theme::langCode()): ?>
+                <span class="lang-current"><?php echo e($sidebarLangName); ?></span>
+                <?php else: ?>
+                <a href="<?php echo e(Theme::langSwitchUrl($sidebarLangCode)); ?>"><?php echo e($sidebarLangName); ?></a>
+                <?php endif; ?>
+            </li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+    <?php endif; ?>
+
     <?php do_action('sidebar_widgets'); /* 插件注入点：侧边栏追加分组/小工具（输出需自带 .sidebar-section 结构并自行转义） */ ?>
 
     </div><!-- /.sidebar-body -->
 
     <?php // 明暗切换钉在侧边栏左下角（不再随内容流居中） ?>
     <div class="sidebar-darkmode">
-        <button type="button" class="darkmode-toggle" id="darkmode-toggle" aria-label="切换暗色模式" title="切换暗色模式">
+        <button type="button" class="darkmode-toggle" id="darkmode-toggle" aria-label="<?php echo e(theme_t('theme.common.darkmode')); ?>" title="<?php echo e(theme_t('theme.common.darkmode')); ?>">
             <span id="darkmode-icon">☾</span>
         </button>
     </div>

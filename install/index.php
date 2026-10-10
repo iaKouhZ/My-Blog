@@ -235,10 +235,10 @@ function ins_pdo($host, $port, $user, $pass, $dbname = '')
     // DSN 注入防护：host 仅允许主机名/IP/IPv6 字符集，dbname 拒绝分隔符，
     // 防止 ";host=evil" 之类输入把连接重定向到攻击者控制的 MySQL
     if (!preg_match('/^[A-Za-z0-9.\-:]+$/', (string) $host)) {
-        throw new InvalidArgumentException('数据库主机名包含非法字符');
+        throw new InvalidArgumentException(ins_t('install.db.host_invalid'));
     }
     if ($dbname !== '' && strpos($dbname, ';') !== false) {
-        throw new InvalidArgumentException('数据库名包含非法字符');
+        throw new InvalidArgumentException(ins_t('install.db.name_invalid'));
     }
     $dsn = 'mysql:host=' . $host . ';port=' . (int) $port . ';charset=utf8mb4';
     if ($dbname !== '') {
@@ -466,10 +466,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $message = ins_t('install.admin.password_mismatch');
                     break;
                 }
-                // 服务端强制口令复杂度校验（与注册/改密同规则）
-                $pwdErr = Auth::validate_password_strength($password, $username);
-                if ($pwdErr !== '') {
-                    $message = $pwdErr;
+                // 服务端强制口令复杂度校验（与注册/改密同规则；机器码映射向导语言包）
+                $pwdCode = Auth::validate_password_strength_code($password, $username);
+                if ($pwdCode !== '') {
+                    $message = ins_t('install.auth.' . $pwdCode);
                     break;
                 }
                 if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
