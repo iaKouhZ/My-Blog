@@ -67,12 +67,13 @@ defined('APP_BOOT') or exit;
 | `admin_head` | action | 无 | 后台 `</head>` 前输出点（插件后台样式/脚本） |
 | `admin_footer` | action | 无 | 后台 `</body>` 前输出点 |
 | `post_content` | filter | `$html` | 文章正文渲染后、输出前（可追加处理） |
+| `markdown_callout_types` | filter | `$types` | 正文 Callout 类型表：`规范类型 => array(别名数组, 语言键, 中文缺省标题)`，插件可新增类型（`[!别名]` 与 `[!类型]` 均可用，类型名/别名须匹配 `^[a-z][a-z0-9-]*$`，内核会丢弃非法项）；未注册类型降级为 `note` |
 | `front_posts` | filter | `$posts, $context` | 首页/归档/搜索列表当前页文章数组，可排序/修饰（`$context` 为 home/category/author/search；分页已在此之前确定，不宜移除条目） |
 | `comment_before_save` | filter | `$data` | 评论入库前，可改写或拦截 |
 | `comment_write_allowed` | filter | `$allowed, $action, $postId, $commentId` | 前台评论写入统一拦截点（内核触发）；`$action` 为 create/update/delete（create 时 `$commentId=0`），返回 `false` 拒绝并记审计日志；后台评论管理不受影响 |
 | `post_edit_fields` | action | `$post` | 后台文章编辑表单内扩展字段注入点（内核视图触发，新建时 `$post` 为 null；输出需自带 `.form-row` 结构并自行转义） |
-| `post_saved` | action | `$id, $data, $isNew` | 文章保存完成后（内核触发），插件在此持久化随文章的扩展数据 |
-| `post_deleted` | action | `$id` | 文章彻底删除后（内核触发），插件清理随文章的扩展数据 |
+| `post_saved` | action | `$id, $data, $isNew` | 文章及导航核心事务提交后（内核触发），插件在此持久化随文章的扩展数据 |
+| `post_deleted` | action | `$id` | 文章、评论及导航核心事务提交后（内核触发），插件清理随文章的扩展数据 |
 | `post_list_row_actions` | action | `$post` | 后台文章列表行内追加操作按钮（内核视图触发，输出需自带 CSRF 表单） |
 | `comment_list_row_actions` | action | `$comment` | 后台评论列表行内追加操作按钮（内核视图触发，输出需自带 CSRF 表单） |
 | `comment_area_state` | filter | `$state, $post` | 文章详情页评论区渲染状态（内核+主题各触发一次）；`$state` 为 `array('list','form','actions')` 布尔数组，分别控制评论列表/发表框/编辑删除按钮，`list=false` 时内核跳过评论查询 |
@@ -94,6 +95,9 @@ defined('APP_BOOT') or exit;
 | `theme_settings_schema` | filter | `$schema, $theme` | 主题设置清单（后台设置页字段定义），插件可给指定主题追加设置项 |
 | `profile_cards` | action | `$user` | 后台个人资料页追加卡片（内核视图触发） |
 | `plugin_activate` / `plugin_deactivate` / `plugin_uninstall` | action | `$slug` | 插件生命周期 |
+
+钩子分发、插件加载与设置页回调的归属由独立 `PluginContext` 管理，嵌套回调与异常退出均恢复调用方。
+`post_saved`/`post_deleted` 是核心事务提交后的通知：插件可写扩展数据，但不应假设其异常能撤销已提交的正文；异常另记 `post.hook_failed` 审计。外部发送也不应放入核心事务。
 
 ## 3.1 自定义路由（OAuth 回调 / Webhook 等）
 
@@ -118,8 +122,9 @@ function my_handle_callback($params)
 }
 ```
 
-URL 生成需兼容伪静态开关：开启时 `Router::base() . '/my-callback'`，
-关闭时 `Router::base() . '/index.php?r=' . rawurlencode('my-callback')`。
+URL 统一使用 `Router::url('custom', array('path' => 'my-callback'))`，自动兼容伪静态开关。
+自定义路径只接受字母数字开头及字母、数字、斜杠、下划线、连字符，最长 200 字符，非法路径抛出异常。
+QQ 插件认领 `qqlogin-callback`（OAuth 回调）、`qqlogin/bind`（POST 发起绑定/换绑）、`qqlogin/unbind`（POST 解绑）；后两者必须校验 CSRF、edit_profile、密码过期状态并重验当前密码。
 
 ## 4. 插件 API
 
@@ -139,9 +144,14 @@ URL 生成需兼容伪静态开关：开启时 `Router::base() . '/my-callback'`
 | `plugin_url($slug, $path)` | 插件静态资源 URL |
 | `register_verify_provider($channel)` | 声明验证码渠道能力（仅插件加载期可调，强制归属当前插件） |
 | `get_verify_provider($channel)` | 查询渠道声明者 slug（未声明返回 null） |
+| `VerificationService::recordSent($scene,$target,$code,$channel,$ttl=600)` | 已声明渠道的插件在成功发送后统一登记本地验证码；当前归属必须匹配渠道声明者；有效期钳制 1–3600 秒 |
 | `register_plugin_page($slug, $title, $callback)` | 注册后台设置页（在 `admin_menu` 钩子中调用） |
 | `plugin_t($slug, $key, $args, $default, $lang)` | 插件文案翻译（见 §4.3 插件多语言约定） |
-| `input_password($key, $default, $maxLen)` | 口令/密钥专用输入校验器（原样透传不 trim 不过滤，仅字符串化与长度上限；AccessKeySecret、SMTP 授权码等一律经它读取，禁止直读 `$_POST`） |
+| `input_password($key, $default, $maxLen)` | 口令/密钥专用输入校验器：不 trim、不截断；非字符串、超长或含 NUL 时返回缺省值；AccessKeySecret、SMTP 授权码等一律经它读取 |
+| `Router::url('custom', array('path' => $path))` | 自定义站内路径统一生成，兼容两种重写模式，拒绝路径穿越与查询/片段拼接 |
+| `Auth::confirmCurrentPassword($password)` | 当前身份重验，布尔返回；与登录共享持久化失败锁定及账号限额，不创建登录会话；调用方仍须验证 POST、CSRF、权限与过期策略 |
+| `Auth::passwordFingerprint($hash)` | 生成口令版本指纹，供会话与敏感授权 state 绑定身份，不输出到页面/日志 |
+| `RateLimiter::allowFor($bucket,$identity,$max,$windowSeconds=60)` | 可信账号等主体限额，窗口 1–86400 秒；identity 必须取服务端已认证身份，不能采用客户端自报账号；取锁失败拒绝 |
 
 其他可用内核 API：`add_action/add_filter`、`e()`、`Router::url()`、`Option::get()`、
 `DB::query()`（结构化查询构造器，值自动参数绑定）、`blog_log()`、`client_ip()` 等。
@@ -162,6 +172,8 @@ URL 生成需兼容伪静态开关：开启时 `Router::base() . '/my-callback'`
 
 数组值自动 JSON 编码；读取返回字符串，需数组时自行 `json_decode`。
 
+内核限流占用保留命名空间 `__core_throttle`；IP 分钟计数兼容旧 options 窗口，主体额度按业务桶、身份及窗口时长隔离，TTL 不早于窗口结束。插件不得写入保留命名空间。评论和上传的拒绝按账号每分钟审计一次，其余业务审计契约保留。
+
 ### 4.2 卸载自动清理
 
 后台「插件管理 → 删除」时内核自动清理：`plugin_{slug}_*` 全部选项、
@@ -180,6 +192,10 @@ URL 生成需兼容伪静态开关：开启时 `Router::base() . '/my-callback'`
    `plugin_data` 行或 `plugin_{slug}_*` 选项的插件，提供「清理残留数据」
    按钮（`plugin/cleanup_orphan`，管理员权限 + CSRF + 审计留痕），
    复用卸载回收逻辑全量清理。
+
+内核限流复用现有 plugin_data 的 TTL 存储，保留 slug `__core_throttle`（普通插件 slug 规则不能认领）。
+这些记录不是插件配置，不进入 Option 的全量缓存；请勿依赖其内部键或在插件卸载时清理。
+配置与插件数据的重复键写入由原子 upsert 完成，读 API 和命名空间守卫保持兼容。
 
 ### 4.3 插件多语言约定（plugin_t）
 
@@ -242,8 +258,10 @@ function hello_world_page()
   `profile`（后台个人资料改绑邮箱/手机，仅登录用户可触发）。
 - 发送：内核已完成频率限制（60s 间隔、每日 ≤10、IP 限流，内核强制不可绕过）后
   调用过滤器，参数为 `($handled=false, $scene, $target, $channel, $code)`。
-  插件接管时须自行把验证码写入 `verify_codes` 表（或采用云端生成模式），
-  然后返回 `true`；返回其它值视为未接管。
+  插件成功发送后调用 `VerificationService::recordSent($scene,$target,$code,$channel,$ttl)`
+  登记本地验证码，然后返回 `true`；登记须在当前渠道声明者的执行上下文中进行。
+  为兼容已有插件，直接写入 verify_codes 的旧契约仍保留；云端生成模式仍须实现等价核验和配额记录。
+  同渠道被其它插件接管时应在发送前检查 get_verify_provider($channel)，避免发送后才发现归属不匹配。
 - 核验：`($result=null, $scene, $target, $code, $channel)`。返回 `bool` 即接管；
   返回 `null` 回退本地 `verify_codes` 表核验。
   本地核验与发送共用 `vsend_` 目标命名锁（渠道 + 小写归一后的目标），错误计数原子递增，
@@ -275,10 +293,11 @@ function hello_world_page()
 
 ## 8. 完整示例
 
+- `plugins/smtp-mailer/README.md`：SMTP 配置、语言与公共验证码登记接入。
 - `plugins/hello-world/hello-world.php`：钩子与设置页基础用法。
 - `plugins/qq-login/`：自定义路由（OAuth 回调）、登录页/个人资料页钩子注入、
   `plugin_data` 用户级绑定存储、内核 IP 限流与 state 防伪的完整实战。
-  回调计数使用内核 `options.throttle_qq_callback_*`（每日惰性清理），绑定命名锁失败即拒绝写入；
+  回调计数经 RateLimiter 写入 plugin_data 的内核保留命名空间 `__core_throttle`（TTL 一小时），首次迁入沿用旧 options.throttle_qq_callback_* 窗口；绑定命名锁失败即拒绝写入；
   旧版本 `plugin_data` 中的 `rl_*` 临时计数按既有到期清理机制回收，无需迁移。
 - `plugins/comment-guard/`：文章级评论三态管制——后台表单注入（`post_edit_fields`/`post_saved`）、
   服务端评论写拦截（`comment_write_allowed`）、前台条件渲染（`comment_area_state`）的组合实战。

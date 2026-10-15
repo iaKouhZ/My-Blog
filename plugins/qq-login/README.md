@@ -7,7 +7,7 @@
 1. 在 [QQ 开放平台](https://connect.qq.com/) 创建「网站应用」并完成审核；
 2. 后台 → 插件 → QQ登录，填入**网站域名**（含协议，如 `https://blog.example.com`）、APP ID / APP Key；
 3. 将设置页展示的**回调地址**（`https://你的域名/qqlogin-callback`）原样登记到开放平台；
-4. 用户到「后台 → 个人资料」绑定 QQ，此后即可在登录页点击 QQ 图标直接登录。
+4. 用户到「后台 → 个人资料」输入当前密码后绑定 QQ，此后即可在登录页点击 QQ 图标直接登录；换绑与解绑也须确认当前密码。
 
 > 回调地址必须由配置的网站域名拼接成绝对 URL（QQ 接口要求，且反向代理/多域名
 > 场景下不能依赖当前请求域名）；域名未填写时插件视为未配置，入口不展示。
@@ -21,6 +21,8 @@
   攻击期间保有可信的自助进入途径。封禁 / 禁用 / 注销等账号状态在两条通道同等生效，
   不存在绕过空间；
 - **state 双重防伪**：HMAC-SHA256 签名 + 会话随机数一次性校验（10 分钟有效），防 CSRF 与重放；
+- **绑定身份确认**：`qqlogin/bind` / `qqlogin/unbind` 仅接受 POST，校验 CSRF、权限和当前密码；密码失败与登录共享持久化锁定。绑定 state 同时记录账号 ID 与口令指纹，回调切换账号或口令版本时拒绝；无关 state 不提前销毁当前授权；
+- **后台表单样式**：个人资料中的绑定、换绑和解绑表单复用现有 Layui 输入框与按钮样式，与资料编辑、修改密码页面保持一致；
 - **回调限流**：复用内核 `ip_throttle_allow('qq_callback', 10)`，同一 IP 每分钟最多 10 次回调，IPv6 按 /64 归一；取锁失败即拒绝，计数在锁内读取最新值；
 - **绑定存储**：`plugin_data` 表用户级作用域（`qq_openid` / `qq_nickname`），一个 QQ 只能绑定一个账号；按 OpenID 加锁，未取得锁时拒绝写入；
 - **密码过期**：内核策略默认关闭；开启后 QQ 登录同样建立过期标记，既有会话到期后也受后台拦截，绑定/解绑需先完成强制改密；
@@ -29,12 +31,12 @@
 
 ## 依赖的内核能力
 
-- 自定义路由：`route_parse` 过滤器 + `front_route_{name}` 动作（回调 / 解绑端点）
+- 自定义路由：`route_parse` 过滤器 + `front_route_{name}` 动作（回调 / 发起绑定 / 解绑端点）；站内 URL 统一使用 `Router::url('custom', ...)`
 - 主题钩子：`auth_form_footer`（登录页入口）、后台视图钩子 `profile_cards`（绑定卡片）
 - 数据 API：`plugin_option` / `plugin_data_*` / `plugin_user_*`
-- 认证与限流：`Auth::loginUser()` / `Auth::require_cap()` / `ip_throttle_allow()`
+- 认证与限流：`Auth::loginUser()` / `Auth::require_cap()` / `Auth::confirmCurrentPassword()` / `Auth::passwordFingerprint()` / `ip_throttle_allow()`
 
-升级无需新增表或字段；绑定数据沿用原结构。回调计数改由内核 options 计数器维护，
+升级无需新增表或字段；绑定数据沿用原结构。回调计数由现有 plugin_data 的内核保留命名空间 `__core_throttle` 维护，首次使用沿用旧 options 计数窗口；
 旧 `plugin_data.rl_*` 临时行由已有过期清理逻辑回收。
 
 插件卸载时内核自动清理全部配置与绑定数据，无残留。

@@ -98,7 +98,7 @@ class AdminUser
         // 前置唯一性查重存在并发窗口（TOCTOU）：撞唯一索引时捕获重复键异常转为友好提示，
         // 避免裸 PDOException 暴露 500
         try {
-            $newId = DB::insert('users', array(
+            $newId = UserService::create(array(
                 'username'            => $username,
                 'nickname'            => $nickname !== '' ? $nickname : $username,
                 'password'            => password_hash($password, PASSWORD_DEFAULT),
@@ -112,13 +112,10 @@ class AdminUser
                 'login_fail'          => 0,
                 'created_at'          => now(),
             ));
-        } catch (PDOException $ex) {
-            if ($ex->getCode() === '23000') {
-                blog_log('user', 'user.create', 'fail', array('username' => $username, 'reason' => 'duplicate'));
-                flash_set('error', admin_t('admin.user.concurrent_conflict'));
-                redirect(site_base_admin('user/edit'));
-            }
-            throw $ex;
+        } catch (UserConflictException $ex) {
+            blog_log('user', 'user.create', 'fail', array('username' => $username, 'reason' => $ex->getMessage()));
+            flash_set('error', admin_t('admin.user.concurrent_conflict'));
+            redirect(site_base_admin('user/edit'));
         }
         blog_log('user', 'user.create', 'success', array(
             'user_id' => $newId, 'username' => $username, 'role' => $role,
@@ -144,8 +141,7 @@ class AdminUser
             || $phone !== (string) $user['phone'];
         if ($sensitive) {
             $currentPassword = input_password('current_password');
-            $operator = Auth::user();
-            if ($currentPassword === '' || !password_verify($currentPassword, $operator['password'])) {
+            if (!Auth::confirmCurrentPassword($currentPassword)) {
                 blog_log('user', 'user.update', 'fail', array(
                     'target_user_id' => $id, 'reason' => 'operator_password_wrong',
                 ));
@@ -190,35 +186,36 @@ class AdminUser
             'role'     => $role,
             'status'   => $status,
         );
-        DB::update('users', $update, array('id' => $id));
-        $detail = array('target_user_id' => $id, 'role' => $role, 'status' => $status);
-        blog_log('user', 'user.update', 'success', $detail);
+        // 在任何写入前完成口令校验，避免资料已保存而改密失败的部分提交。
+        if ($newPassword !== '') {
+            $pwdCode = Auth::validate_password_strength_code($newPassword, $user['username']);
+            if ($pwdCode !== '') {
+                blog_log('user', 'user.update', 'fail', array('target_user_id' => $id, 'reason' => $pwdCode));
+                flash_set('error', admin_t('admin.auth.' . $pwdCode));
+                redirect(site_base_admin('user/edit&id=' . $id));
+            }
+            $update['password'] = password_hash($newPassword, PASSWORD_DEFAULT);
+            $update['password_changed_at'] = $forceChange ? '2000-01-01 00:00:00' : now();
+        } elseif ($forceChange) {
+            $update['password_changed_at'] = '2000-01-01 00:00:00';
+        }
+        try {
+            UserService::update($id, $update);
+        } catch (UserConflictException $ex) {
+            blog_log('user', 'user.update', 'fail', array('target_user_id' => $id, 'reason' => $ex->getMessage()));
+            flash_set('error', admin_t('admin.user.concurrent_conflict'));
+            redirect(site_base_admin('user/edit&id=' . $id));
+        }
+        blog_log('user', 'user.update', 'success', array('target_user_id' => $id, 'role' => $role, 'status' => $status));
         if ($role !== $user['role']) {
-            // 角色变更必须单独留痕（等保审计要求）
             blog_log('user', 'user.role_change', 'success', array(
                 'target_user_id' => $id, 'from' => $user['role'], 'to' => $role,
             ));
         }
-
-        // 管理员重置密码（可选）
         if ($newPassword !== '') {
-            $pwdCode = Auth::validate_password_strength_code($newPassword, $user['username']);
-            if ($pwdCode !== '') {
-                flash_set('error', admin_t('admin.auth.' . $pwdCode));
-                redirect(site_base_admin('user/edit&id=' . $id));
-            }
-            DB::update('users', array(
-                'password'            => password_hash($newPassword, PASSWORD_DEFAULT),
-                'password_changed_at' => $forceChange ? '2000-01-01 00:00:00' : now(),
-            ), array('id' => $id));
             blog_log('user', 'user.password_reset', 'success', array('target_user_id' => $id));
-            flash_set('success', admin_t('admin.user.saved_pwd_reset'));
-        } else {
-            if ($forceChange) {
-                DB::update('users', array('password_changed_at' => '2000-01-01 00:00:00'), array('id' => $id));
-            }
-            flash_set('success', admin_t('admin.user.saved'));
         }
+        flash_set('success', admin_t($newPassword !== '' ? 'admin.user.saved_pwd_reset' : 'admin.user.saved'));
         redirect(site_base_admin('user/list'));
     }
 

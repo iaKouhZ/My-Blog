@@ -19,12 +19,13 @@ class Option
         if (self::$cache !== null) {
             return self::$cache;
         }
-        self::$cache = array();
-        $rows = DB::query('options')->select(array('option_key', 'option_value'));
+        $cache = array();
+        $rows = DB::query('options')->where('option_key', 'NOT LIKE', 'throttle\_%')
+            ->select(array('option_key', 'option_value'));
         foreach ($rows as $row) {
-            self::$cache[$row['option_key']] = $row['option_value'];
+            $cache[$row['option_key']] = $row['option_value'];
         }
-        return self::$cache;
+        return self::$cache = $cache;
     }
 
     /**
@@ -52,12 +53,7 @@ class Option
         if (is_array($value)) {
             $value = json_encode($value);
         }
-        $exists = DB::query('options')->where('option_key', '=', $key)->value('option_key');
-        if ($exists !== null) {
-            DB::update('options', array('option_value' => (string) $value), array('option_key' => $key));
-        } else {
-            DB::insert('options', array('option_key' => $key, 'option_value' => (string) $value));
-        }
+        DB::query('options')->upsert(array('option_key' => $key, 'option_value' => (string) $value), array('option_value'));
         if (self::$cache !== null) {
             self::$cache[$key] = (string) $value;
         }

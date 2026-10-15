@@ -9,16 +9,18 @@ Options -Indexes
     # 隐藏文件及隐藏目录一律拒绝，防止 .git 等仓库内容被直接下载。
     RewriteRule (^|/)\. - [F,L]
 
-    # 敏感文件/目录拒绝访问：config.php 与 core/
-    RewriteRule ^config\.php$ - [F,L]
-    RewriteRule ^core/ - [F,L]
+    # 配置副本与常见备份同样不能作为静态文件下载；大小写策略兼容 Windows。
+    RewriteRule ^config\.php($|[./~_-]) - [F,L,NC]
+    RewriteRule \.(bak|old|orig|save|swp|swo|log|sql)(\.(gz|bz2|xz|zip))?$ - [F,L,NC]
+    RewriteRule ~$ - [F,L]
+    RewriteRule ^core(/|$) - [F,L,NC]
 
     # 插件/主题目录下的 PHP 文件一律禁止直接执行（与 Nginx 规则对齐；
     # 静态资源不受影响，另有文件头部 APP_BOOT 守卫双重防护）
-    RewriteRule ^(plugins|themes)/.+\.php$ - [F,L]
+    RewriteRule ^(plugins|themes|uploads)/.+\.(php[0-9]*|phtml|pht|phar)(/|$) - [F,L,NC]
 
     # 语言包目录：一律禁止直接访问（内核经 include 加载，另有 APP_BOOT 守卫）
-    RewriteRule ^assets/langs/ - [F,L]
+    RewriteRule ^assets/langs(/|$) - [F,L,NC]
 
     # 真实存在的文件/目录与独立入口直接放行
     RewriteRule ^(install|user|assets|uploads|plugins|themes)(/|$) - [L]

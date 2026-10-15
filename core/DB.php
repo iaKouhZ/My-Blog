@@ -45,9 +45,13 @@ class DB
      * @param string $name 逻辑表名
      * @return string
      */
-    public static function table($name)
+    public static function table($name, $prefix = null)
     {
-        return self::$prefix . $name;
+        $prefix = $prefix === null ? self::$prefix : $prefix;
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $prefix . $name)) {
+            throw new InvalidArgumentException('invalid table identifier');
+        }
+        return $prefix . $name;
     }
 
     /** @return PDO 仅供内核与查询构造器内部使用 */
@@ -73,6 +77,23 @@ class DB
     {
         if (self::$pdo->inTransaction()) {
             self::$pdo->rollBack();
+        }
+    }
+
+    /** 原子执行多步写入；显式拒绝嵌套，防止误提交或回滚调用方事务。 */
+    public static function transaction($callback)
+    {
+        if (self::$pdo->inTransaction()) {
+            throw new LogicException('nested transaction is not supported');
+        }
+        self::begin();
+        try {
+            $result = call_user_func($callback);
+            self::commit();
+            return $result;
+        } catch (Throwable $ex) {
+            self::rollback();
+            throw $ex;
         }
     }
 
@@ -165,7 +186,7 @@ class DB
             return false;
         }
         $stmt = self::$pdo->prepare('SELECT GET_LOCK(?, ?)');
-        $stmt->execute(array(self::$prefix . $name, max(0, (int) $timeoutSeconds)));
+        $stmt->execute(array(self::lockKey($name), max(0, (int) $timeoutSeconds)));
         // fetchColumn 与连接级默认 fetch 模式（ASSOC）无关，必须用它取标量结果
         $value = $stmt->fetchColumn();
         return $value !== false && (int) $value === 1;
@@ -183,8 +204,15 @@ class DB
             return;
         }
         $stmt = self::$pdo->prepare('SELECT RELEASE_LOCK(?)');
-        $stmt->execute(array(self::$prefix . $name));
+        $stmt->execute(array(self::lockKey($name)));
         $stmt->fetch();
+    }
+
+    /** MySQL 锁名最多 64 字节；长表前缀仍须与其它站点隔离。 */
+    private static function lockKey($name)
+    {
+        $key = self::$prefix . $name;
+        return strlen($key) <= 64 ? $key : 'cb_lock_' . substr(hash('sha256', $key), 0, 56);
     }
 }
 
@@ -211,6 +239,9 @@ class DB_Query
 
     /** @var string limit 片段 */
     private $limit = '';
+
+    /** @var bool 事务内锁定业务行，避免读完状态后被另一写入改变 */
+    private $forUpdate = false;
 
     /** 允许的比较运算符白名单 */
     private static $ops = array('=', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE');
@@ -321,6 +352,24 @@ class DB_Query
         return $this;
     }
 
+    /** 多组条件满足任意一组；每组内为 AND，标识符、运算符与值分别校验或绑定。 */
+    public function whereAnyGroups(array $groups)
+    {
+        $parts = array();
+        foreach ($groups as $conditions) {
+            $query = new self($this->logicalTable);
+            foreach ($conditions as $condition) {
+                $query->where($condition[0], $condition[1], $condition[2]);
+            }
+            if (!empty($query->wheres)) {
+                $parts[] = '(' . implode(' AND ', $query->wheres) . ')';
+                $this->params = array_merge($this->params, $query->params);
+            }
+        }
+        $this->wheres[] = empty($parts) ? '1 = 0' : '(' . implode(' OR ', $parts) . ')';
+        return $this;
+    }
+
     /** 排序（字段名标识符校验 + 方向白名单，可多次调用叠加） */
     public function orderBy($field, $dir = 'DESC')
     {
@@ -334,6 +383,13 @@ class DB_Query
     public function limit($limit, $offset = 0)
     {
         $this->limit = ' LIMIT ' . max(0, (int) $offset) . ',' . max(1, (int) $limit);
+        return $this;
+    }
+
+    /** 为事务内的查询加行锁。 */
+    public function forUpdate()
+    {
+        $this->forUpdate = true;
         return $this;
     }
 
@@ -366,7 +422,7 @@ class DB_Query
     public function select($fields = '*')
     {
         $sql = 'SELECT ' . $this->buildFields($fields) . $this->buildFrom()
-            . $this->buildWhere() . $this->order . $this->limit;
+            . $this->buildWhere() . $this->order . $this->limit . ($this->forUpdate ? ' FOR UPDATE' : '');
         $stmt = DB::pdo()->prepare($sql);
         $stmt->execute($this->params);
         return $stmt->fetchAll();
@@ -399,6 +455,46 @@ class DB_Query
         $stmt->execute($this->params);
         $row = $stmt->fetch();
         return (int) $row['cb_cnt'];
+    }
+
+    /** 按字段聚合计数，避免把所有业务行传到 PHP 再统计。 */
+    public function countsBy($field)
+    {
+        $field = self::checkField($field);
+        $stmt = DB::pdo()->prepare('SELECT ' . $field . ' AS cb_group, COUNT(*) AS cb_count'
+            . $this->buildFrom() . $this->buildWhere() . ' GROUP BY ' . $field);
+        $stmt->execute($this->params);
+        $counts = array();
+        foreach ($stmt->fetchAll() as $row) {
+            $counts[$row['cb_group']] = (int) $row['cb_count'];
+        }
+        return $counts;
+    }
+
+    /** 按唯一键原子插入或更新；日志表仍只允许普通插入。 */
+    public function upsert(array $data, array $updateFields)
+    {
+        $this->guardLogs('UPSERT');
+        if (empty($data) || empty($updateFields)) {
+            throw new InvalidArgumentException('upsert requires data and update fields');
+        }
+        $columns = array();
+        foreach (array_keys($data) as $column) {
+            $columns[] = '`' . self::checkIdent($column) . '`';
+        }
+        $updates = array();
+        foreach ($updateFields as $column) {
+            if (!array_key_exists($column, $data)) {
+                throw new InvalidArgumentException('upsert field is absent from data');
+            }
+            $column = '`' . self::checkIdent($column) . '`';
+            $updates[] = $column . ' = VALUES(' . $column . ')';
+        }
+        $stmt = DB::pdo()->prepare('INSERT INTO `' . $this->table . '` (' . implode(',', $columns)
+            . ') VALUES (' . implode(',', array_fill(0, count($data), '?')) . ')'
+            . ' ON DUPLICATE KEY UPDATE ' . implode(',', $updates));
+        $stmt->execute(array_values($data));
+        return $stmt->rowCount();
     }
 
     /** 插入并返回自增 ID */
@@ -447,13 +543,16 @@ class DB_Query
     {
         $this->guardLogs('UPDATE');
         $delta = (int) $delta;
+        if ($delta <= 0) {
+            throw new InvalidArgumentException('increment requires a positive delta');
+        }
         $colIdent = self::checkIdent($col);
         // LAST_INSERT_ID(expr) 把表达式值写入连接级 LAST_INSERT_ID，随后 lastInsertId() 取回，
         // 避免"读取-计算-写回"在并发请求下互相覆盖（登录失败计数等安全计数器依赖此语义）
         $sql = 'UPDATE `' . $this->table . '` SET `' . $colIdent . '` = LAST_INSERT_ID(`'
-            . $colIdent . '` + (' . $delta . '))' . $this->buildWhere();
+            . $colIdent . '` + ?)' . $this->buildWhere();
         $stmt = DB::pdo()->prepare($sql);
-        $stmt->execute($this->params);
+        $stmt->execute(array_merge(array($delta), $this->params));
         if ($stmt->rowCount() < 1) {
             return false;
         }

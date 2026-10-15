@@ -84,6 +84,14 @@ class AdminSetting
         Auth::require_cap('manage_security');
         $changed = array();
 
+        if (max(0, input_int('pwd_history_count', 0, 'post')) > 0) {
+            try {
+                self::ensurePasswordHistoryTable();
+            } catch (Throwable $ex) {
+                blog_log('security', 'setting.security', 'fail', array('reason' => 'password_history_schema_failed'));
+                throw $ex;
+            }
+        }
         $intRules = array(
             // 键 => array(缺省, 下限, 上限)
             'login_max_fail'        => array(5, 1, 20),
@@ -127,11 +135,6 @@ class AdminSetting
             $changed[] = 'ip_header_name';
         }
         Option::set('ip_header_name', $headerName);
-
-        // 密码历史开启时按需建表（预留功能，默认关闭）
-        if ((int) Option::get('pwd_history_count', 0) > 0) {
-            self::ensurePasswordHistoryTable();
-        }
 
         blog_log('security', 'setting.security', 'success', array('changed' => $changed));
         flash_set('success', admin_t('admin.setting.security_saved'));
@@ -310,8 +313,6 @@ class AdminSetting
     /** 按需创建 password_history 表 */
     private static function ensurePasswordHistoryTable()
     {
-        require_once APP_ROOT . '/install/schema.php';
-        $prefix = Config::get('db.prefix', 'cb_');
-        DB::pdo()->exec(install_password_history_schema($prefix));
+        Schema::ensurePasswordHistory();
     }
 }

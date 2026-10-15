@@ -52,21 +52,39 @@ class AdminUpload
      */
     private static function saveImage($maxBytes, $sizeMsg)
     {
-        if (empty($_FILES['file'])) {
+        $identity = 'user:' . Auth::id();
+        $avatar = $maxBytes <= 1024 * 1024;
+        $daily = $avatar ? 10 : 100;
+        if (!RateLimiter::allowFor('upload', $identity, 10)
+            || !RateLimiter::allowFor($avatar ? 'upload_avatar' : 'upload_image', $identity, $daily, 86400)
+            || !ip_throttle_allow('upload', 30)) {
+            if (RateLimiter::allowFor('upload_denied', $identity, 1)) {
+                blog_log('security', 'upload.throttled', 'fail', array());
+            }
+            http_response_code(429);
+            header('Retry-After: 60');
+            json_out(array('code' => 1, 'msg' => admin_t('admin.auth.throttled')));
+        }
+        if (empty($_FILES['file']) || !is_array($_FILES['file'])) {
             json_out(array('code' => 1, 'msg' => admin_t('admin.upload.no_file')));
         }
         $file = $_FILES['file'];
+        if (!isset($file['error'], $file['tmp_name']) || !is_int($file['error']) || !is_string($file['tmp_name'])) {
+            json_out(array('code' => 1, 'msg' => admin_t('admin.upload.no_file')));
+        }
         if ((int) $file['error'] !== UPLOAD_ERR_OK) {
             json_out(array('code' => 1, 'msg' => admin_t('admin.upload.error_code', array((int) $file['error']))));
         }
-        if ((int) $file['size'] > $maxBytes || (int) $file['size'] <= 0) {
+        if (!is_uploaded_file($file['tmp_name'])) {
+            json_out(array('code' => 1, 'msg' => admin_t('admin.upload.no_file')));
+        }
+        // 只相信磁盘真实长度，不依赖客户端声明的 size。
+        if (filesize($file['tmp_name']) > $maxBytes || filesize($file['tmp_name']) <= 0) {
             json_out(array('code' => 1, 'msg' => $sizeMsg));
         }
-        // fileinfo 检测真实 MIME（不信任客户端声明的扩展名/类型）
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mime = $finfo->file($file['tmp_name']);
-        if (!isset(self::$mimeMap[$mime])) {
-            json_out(array('code' => 1, 'msg' => admin_t('admin.upload.mime_whitelist')));
+        $image = self::inspectImage($file['tmp_name'], $maxBytes);
+        if ($image === null) {
+            json_out(array('code' => 1, 'msg' => admin_t('admin.upload.image_invalid')));
         }
 
         $subDir = date('Y/m');
@@ -75,12 +93,37 @@ class AdminUpload
             json_out(array('code' => 1, 'msg' => admin_t('admin.upload.dir_failed')));
         }
         // 用文件内容 md5 命名：内容相同的图片得到相同文件名，命中已存在文件则跳过落盘（秒传去重）
-        $dest = $targetDir . '/' . md5_file($file['tmp_name']) . '.' . self::$mimeMap[$mime];
+        $dest = $targetDir . '/' . $image['hash'] . '.' . $image['extension'];
         if (!is_file($dest)) {
             if (!move_uploaded_file($file['tmp_name'], $dest)) {
                 json_out(array('code' => 1, 'msg' => admin_t('admin.upload.save_failed')));
             }
         }
         return 'uploads/' . $subDir . '/' . basename($dest);
+    }
+
+    /** 检查真实 MIME、文件长度及像素上限；保留原始字节的内容哈希去重约定。 */
+    public static function inspectImage($path, $maxBytes)
+    {
+        if (!is_file($path) || !is_readable($path) || filesize($path) <= 0 || filesize($path) > $maxBytes) {
+            return null;
+        }
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $mime = $finfo->file($path);
+        if (!isset(self::$mimeMap[$mime])) {
+            return null;
+        }
+        try {
+            $size = getimagesize($path);
+        } catch (Throwable $ex) {
+            return null;
+        }
+        // 限制解码资源需求；仅看 MIME 无法识别超大尺寸的压缩图片。
+        if (!$size || $size[0] < 1 || $size[1] < 1 || $size[0] > 10000 || $size[1] > 10000
+            || $size[0] * $size[1] > 25000000 || !isset($size['mime']) || $size['mime'] !== $mime) {
+            return null;
+        }
+        $hash = md5_file($path);
+        return $hash === false ? null : array('hash' => $hash, 'extension' => self::$mimeMap[$mime]);
     }
 }

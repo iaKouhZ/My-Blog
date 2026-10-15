@@ -196,4 +196,19 @@ return array(
     'theme.front.verify_retry'           => 'Sending too frequently, please retry in 60 seconds',
     'theme.front.verify_daily_limit'     => 'Daily sending limit reached',
     'theme.front.verify_unavailable'     => 'Sending channel unavailable',
+
+    /* ---------- 正文 Callout 默认标题（内核 core/Markdown.php 解析 > [!type] 时取用） ---------- */
+    'theme.callout.note'      => 'Note',
+    'theme.callout.abstract'  => 'Abstract',
+    'theme.callout.info'      => 'Info',
+    'theme.callout.todo'      => 'Todo',
+    'theme.callout.tip'       => 'Tip',
+    'theme.callout.success'   => 'Success',
+    'theme.callout.question'  => 'Question',
+    'theme.callout.warning'   => 'Warning',
+    'theme.callout.failure'   => 'Failure',
+    'theme.callout.danger'    => 'Danger',
+    'theme.callout.bug'       => 'Bug',
+    'theme.callout.example'   => 'Example',
+    'theme.callout.quote'     => 'Quote',
 );

@@ -62,7 +62,7 @@ Description: 主题描述（后台列表展示，截断 40 字）
 | 模板 | 注入变量 |
 |---|---|
 | index / archive / search | `page_type`、`title`、`posts`（数组）、`page`、`totalPages`、`route`、`routeParams`；archive 另有 `subject`（分类路由为分类对象；作者路由为用户行：`id`/`username`/`nickname`/`avatar`/`signature`，作者页建议展示头像/昵称/签名三行居中，不带“作者：”前缀）；search 另有 `kw` |
-| single | `page_type`、`title`、`post`（含 `author` 快照）、`comments` |
+| single | `page_type`、`title`、`post`（含 `author` 快照）、`comments`（当前页可见评论）、`commentTotal`、`commentPage`、`commentTotalPages`、`editCommentId` |
 | page | `page_type`、`title`、`post` |
 | login / register / forgot | `page_type`、`title`、`error`，及各自表单回显变量 |
 | 404 | `page_type`、`title` |
@@ -70,6 +70,11 @@ Description: 主题描述（后台列表展示，截断 40 字）
 补充：`login` 另有 `account`（账号回显）；`register` 另有 `old`（表单回显数组）
 与 `emailEnabled`、`smsEnabled`（邮件/短信插件是否启用）；`forgot` 另有
 `info`（提示文案）与 `emailEnabled`、`smsEnabled`。
+
+评论每页 50 条，按 created_at/id 升序；游客只见已发布评论，登录用户额外见自己的待审核评论。
+评论分页使用 `paginate($commentPage,$commentTotalPages,'post',array('id'=>...,'slug'=>...))`，由 Router 生成 comment_page 参数与 #comments 锚点；搜索分页同样保留 page。
+当前页不含父评论时，回复应按独立评论展示，避免跨页回复被主题丢弃；父评论同页时沿用一层回复结构。总数标题应使用 commentTotal。
+现有主题忽略新增字段仍可渲染，建议补充分页导航。Theme 既有方法和助手保持兼容，语言与公共数据分别由 ThemeLocale / ThemeData 实现，主题无需直接依赖这些内部类。
 
 ### 3.1 认证页验证码约定（register / forgot）
 
@@ -152,13 +157,32 @@ Description: 主题描述（后台列表展示，截断 40 字）
 - 建议放在侧边栏导航分组中「首页 + `nav_pages()`」之后渲染（参考
   `themes/default/sidebar.php`）；无自定义项时返回空数组，无需额外判空分支。
 
-### 4.2 公式与代码高亮渲染约定
+### 4.2 公式、代码高亮与 Callout 渲染约定
 
 `render_content()` 输出的正文中，数学公式为占位容器：行内公式是
 `<span class="tex-inline">原始 TeX</span>`，块级公式是
 `<div class="tex-block">原始 TeX</div>`（单独成行的行内公式会被包在
 `<p>` 里，**不会出现 `tex-block` 套 `tex-inline` 的嵌套**）；围栏代码块为
 `<pre><code class="language-xxx">`。
+
+Obsidian Callout（`> [!note] 标题`）由内核解析为：
+
+```html
+<div class="callout callout-note">
+  <div class="callout-title">标题</div>
+  <div class="callout-content">…块级 Markdown 渲染结果…</div>
+</div>
+```
+
+- 第二个类名 `callout-{类型}` 是规范类型（`note`/`abstract`/`info`/`todo`/
+  `tip`/`success`/`question`/`warning`/`failure`/`danger`/`bug`/`example`/
+  `quote`），**主题按它取语义色即可**（参考默认主题在 `:root` 之外的
+  `.callout-*` 规则与 `html.darkmode` 下的提亮覆写）；
+- 只有标题、正文为空时不产出 `.callout-content` 容器；
+- 标题缺省时内核经 `theme_t('theme.callout.{类型}', array(), '中文缺省')` 取文案，
+  主题语言包补 `theme.callout.*` 键即可本地化，无 `langs/` 目录的主题回退中文缺省；
+- 结构只用 `div` + `class`，不引入新标签，主题无需改动 XSS 白名单；
+- `[!note]+` / `[!note]-` 折叠标记当前**仅识别并丢弃**，不产出折叠结构。
 
 主题若需展示公式/高亮，须在 `functions.php` 中经 `front_head` / `front_footer`
 钩子加载**本地化**的 KaTeX / highlight.js 资源，最后加载随主题自带的
@@ -170,7 +194,10 @@ Description: 主题描述（后台列表展示，截断 40 字）
 1. 主题不得自行调用 KaTeX 二次渲染正文（`render.js` 已带幂等守卫，
    重复挂载会浪费资源；对已渲染产物再渲染会把公式内容翻倍）；
 2. 主题不得在正文外再包一层 `.tex-block` / `.tex-inline` 容器，
-   也不得对 `render_content()` 的输出做正则改写。
+   也不得对 `render_content()` 的输出做正则改写；
+3. 代码、公式与 Callout 由内核按层级解析，代码内 `$` 不会触发公式；嵌套上限 64，超出部分转义显示。
+4. 主题不得自行解析或改写 Callout（`.callout` 的生成与类型白名单由内核负责，
+   改写会绕过类型校验；后台 Vditor 预览仍显示普通引用属已知差异，**前台渲染为准**）。
 
 ### 4.3 主题多语言（i18n）
 
@@ -228,6 +255,10 @@ add_filter('post_content', 'my_theme_content');
 常用：`front_head`、`front_footer`、`post_content`）。
 
 ### 5.1 主题应触发的插件注入点
+
+注入点名称和参数保持不变。`comments_before/after` 包围当前页评论及分页导航，不代表一次渲染全部评论；读取总数请用 cb_ctx()['commentTotal']。
+文章正文与评论可见性由控制器/查询服务处理，主题注入点不得自行补查其它用户的待审核评论。
+
 
 除内核自动触发的钩子外，主题模板内应保留以下输出点，供插件注入界面元素
 （参考 `themes/default`）：

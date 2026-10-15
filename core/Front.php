@@ -83,27 +83,10 @@ class Front
      */
     private static function listing($route, $page, array $extraWhere, $title)
     {
-        $perPage = max(1, (int) Option::get('posts_per_page', 10));
-        $query = DB::query('posts')
-            ->where('status', '=', 'published')
-            ->where('is_page', '=', 0);
-        foreach ($extraWhere as $w) {
-            $query->where($w[0], $w[1], $w[2]);
-        }
-        $total = $query->count();
-        $totalPages = max(1, (int) ceil($total / $perPage));
-        $page = min(max(1, $page), $totalPages);
-
-        $q = DB::query('posts')
-            ->where('status', '=', 'published')
-            ->where('is_page', '=', 0);
-        foreach ($extraWhere as $w) {
-            $q->where($w[0], $w[1], $w[2]);
-        }
-        $posts = $q->orderBy('is_top', 'DESC')->orderBy('created_at', 'DESC')
-            ->limit($perPage, ($page - 1) * $perPage)
-            ->select();
-        self::attachAuthors($posts);
+        $result = PostQuery::page($page, $extraWhere);
+        $posts = $result['posts'];
+        $page = $result['page'];
+        $totalPages = $result['totalPages'];
         // 插件可排序/修饰当前页文章（总数与分页在此之前已定，不宜移除条目）
         $posts = apply_filters('front_posts', $posts, $route);
 
@@ -114,61 +97,8 @@ class Front
             'page'       => $page,
             'totalPages' => $totalPages,
             'route'      => $route,
-            'routeParams' => $extraWhere ? array() : array(),
+            'routeParams' => array(),
         ));
-    }
-
-    /**
-     * 注销用户前台展示匿名化：用户名/昵称统一显示“用户已注销”，头像置空
-     * （模板侧 avatar_url 遇空头像自动回退默认头像）；数据不删除，仅展示层匿名
-     *
-     * @param array $author 用户行（需含 is_deleted）
-     * @return array
-     */
-    private static function maskDeletedAuthor(array $author)
-    {
-        if (!empty($author['is_deleted'])) {
-            $author['nickname'] = theme_t('theme.front.deleted_user', array(), '用户已注销');
-            if (isset($author['username'])) {
-                $author['username'] = theme_t('theme.front.deleted_user', array(), '用户已注销');
-            }
-            $author['avatar'] = '';
-            if (isset($author['signature'])) {
-                $author['signature'] = '';
-            }
-        }
-        return $author;
-    }
-
-    /** 为文章列表附加作者信息 */
-    private static function attachAuthors(array &$posts)
-    {
-        if (empty($posts)) {
-            return;
-        }
-        $ids = array();
-        foreach ($posts as $post) {
-            $ids[] = (int) $post['author_id'];
-        }
-        $users = DB::query('users')->whereIn('id', array_unique($ids))
-            ->select(array('id', 'username', 'nickname', 'avatar', 'is_deleted'));
-        $map = array();
-        foreach ($users as $u) {
-            $map[(int) $u['id']] = self::maskDeletedAuthor($u);
-        }
-        // 分类名映射
-        $cats = DB::query('categories')->select(array('id', 'name', 'slug'));
-        $catMap = array();
-        foreach ($cats as $c) {
-            $catMap[(int) $c['id']] = $c;
-        }
-        foreach ($posts as &$post) {
-            $aid = (int) $post['author_id'];
-            $post['author'] = isset($map[$aid]) ? $map[$aid] : array('nickname' => theme_t('theme.front.unknown_user', array(), '未知'), 'id' => 0, 'avatar' => '');
-            $cid = (int) $post['category_id'];
-            $post['category'] = isset($catMap[$cid]) ? $catMap[$cid] : null;
-        }
-        unset($post);
     }
 
     /** 分类归档 */
@@ -192,7 +122,7 @@ class Front
             self::notFound();
             return;
         }
-        $user = self::maskDeletedAuthor($user);
+        $user = PostQuery::maskDeletedAuthor($user);
         // 标题不带“作者：”前缀：主题作者页头部自行展示头像/昵称/签名三行
         self::renderArchive('author', $params['page'], array(
             array('author_id', '=', (int) $user['id']),
@@ -202,27 +132,10 @@ class Front
     /** 归档列表渲染（分类/作者共用） */
     private static function renderArchive($route, $page, array $extraWhere, $title, array $routeParams, $subject)
     {
-        $perPage = max(1, (int) Option::get('posts_per_page', 10));
-        $query = DB::query('posts')
-            ->where('status', '=', 'published')
-            ->where('is_page', '=', 0);
-        foreach ($extraWhere as $w) {
-            $query->where($w[0], $w[1], $w[2]);
-        }
-        $total = $query->count();
-        $totalPages = max(1, (int) ceil($total / $perPage));
-        $page = min(max(1, $page), $totalPages);
-
-        $q = DB::query('posts')
-            ->where('status', '=', 'published')
-            ->where('is_page', '=', 0);
-        foreach ($extraWhere as $w) {
-            $q->where($w[0], $w[1], $w[2]);
-        }
-        $posts = $q->orderBy('is_top', 'DESC')->orderBy('created_at', 'DESC')
-            ->limit($perPage, ($page - 1) * $perPage)
-            ->select();
-        self::attachAuthors($posts);
+        $result = PostQuery::page($page, $extraWhere);
+        $posts = $result['posts'];
+        $page = $result['page'];
+        $totalPages = $result['totalPages'];
         // 插件可排序/修饰当前页文章（总数与分页在此之前已定，不宜移除条目）
         $posts = apply_filters('front_posts', $posts, $route);
 
@@ -241,30 +154,21 @@ class Front
     /** 搜索 */
     private static function search()
     {
+        if (!ip_throttle_allow('search', 30)) {
+            self::tooManyRequests();
+        }
         $kw = input_text('q', '', 50, 'get');
         $page = input_int('page', 1, 'get');
-        $perPage = max(1, (int) Option::get('posts_per_page', 10));
         $posts = array();
         $total = 0;
         $totalPages = 1;
+        $page = max(1, $page);
         if ($kw !== '') {
-            $query = DB::query('posts')
-                ->where('status', '=', 'published')
-                ->where('is_page', '=', 0)
-                ->likeAny(array('title', 'content', 'excerpt'), $kw);
-            $total = $query->count();
-            $totalPages = max(1, (int) ceil($total / $perPage));
-            $page = min(max(1, $page), $totalPages);
-            $q = DB::query('posts')
-                ->where('status', '=', 'published')
-                ->where('is_page', '=', 0)
-                ->likeAny(array('title', 'content', 'excerpt'), $kw);
-            $posts = $q->orderBy('is_top', 'DESC')->orderBy('created_at', 'DESC')
-                ->limit($perPage, ($page - 1) * $perPage)
-                ->select();
-            self::attachAuthors($posts);
-            // 插件可排序/修饰当前页文章（总数与分页在此之前已定，不宜移除条目）
-            $posts = apply_filters('front_posts', $posts, 'search');
+            $result = PostQuery::page($page, array(), $kw);
+            $posts = apply_filters('front_posts', $result['posts'], 'search');
+            $total = $result['total'];
+            $totalPages = $result['totalPages'];
+            $page = $result['page'];
         }
         Theme::render('search', array(
             'page_type'   => 'search',
@@ -303,12 +207,12 @@ class Front
 
         // 浏览数 +1
         DB::query('posts')->where('id', '=', (int) $post['id'])
-            ->update(array('views' => (int) $post['views'] + 1));
+            ->increment('views');
 
         $author = DB::query('users')->where('id', '=', (int) $post['author_id'])
             ->first(array('id', 'username', 'nickname', 'avatar', 'is_deleted'));
         if ($author) {
-            $author = self::maskDeletedAuthor($author);
+            $author = PostQuery::maskDeletedAuthor($author);
         }
         $category = null;
         if ((int) $post['category_id'] > 0) {
@@ -320,22 +224,11 @@ class Front
         // 评论：游客只见 published；作者本人可见自己的 pending
         // 插件可经 comment_area_state 按文章关闭评论区（list=false 时连查询一并跳过）
         $commentAreaState = apply_filters('comment_area_state', array('list' => true, 'form' => true, 'actions' => true), $post);
-        $comments = array();
+        $commentResult = array('comments' => array(), 'total' => 0, 'page' => 1, 'pages' => 1);
         if (!empty($commentAreaState['list'])) {
-            $commentQuery = DB::query('comments')
-                ->where('post_id', '=', (int) $post['id'])
-                ->where('status', '=', 'published');
-            $comments = $commentQuery->orderBy('created_at', 'ASC')->select();
-            if (Auth::check()) {
-                $mine = DB::query('comments')
-                    ->where('post_id', '=', (int) $post['id'])
-                    ->where('user_id', '=', Auth::id())
-                    ->where('status', '=', 'pending')
-                    ->orderBy('created_at', 'ASC')
-                    ->select();
-                $comments = array_merge($comments, $mine);
-            }
+            $commentResult = CommentQuery::page((int) $post['id'], Auth::id(), input_int('comment_page', 1, 'get'));
         }
+        $comments = $commentResult['comments'];
         $commentUsers = array();
         $uids = array();
         foreach ($comments as $c) {
@@ -345,7 +238,7 @@ class Front
             $rows = DB::query('users')->whereIn('id', array_unique($uids))
                 ->select(array('id', 'nickname', 'avatar', 'is_deleted'));
             foreach ($rows as $r) {
-                $commentUsers[(int) $r['id']] = self::maskDeletedAuthor($r);
+                $commentUsers[(int) $r['id']] = PostQuery::maskDeletedAuthor($r);
             }
         }
         foreach ($comments as &$c) {
@@ -365,6 +258,9 @@ class Front
             'title'     => $post['title'],
             'post'      => $post,
             'comments'  => $comments,
+            'commentTotal' => $commentResult['total'],
+            'commentPage' => $commentResult['page'],
+            'commentTotalPages' => $commentResult['pages'],
             'editCommentId' => $editCommentId,
         ));
     }
@@ -492,8 +388,8 @@ class Front
                 }
                 // 验证码核验（启用对应插件时才要求）；原子消费，同一验证码并发下只能使用一次
                 if ($emailEnabled) {
-                    $code = input_text('email_code', '', 6, 'post');
-                    if ($email === '' || !self::consumeVerifyCode('register', $email, $code, 'email')) {
+                    $code = input_text('email_code', '', 7, 'post');
+                    if ($email === '' || !VerificationService::consume('register', $email, $code, 'email')) {
                         $error = theme_t('theme.front.email_code_invalid', array(), '邮箱验证码错误或已过期');
                         break;
                     }
@@ -504,28 +400,37 @@ class Front
                         $error = theme_t('theme.front.phone_required', array(), '请输入手机号');
                         break;
                     }
-                    $code = input_text('sms_code', '', 6, 'post');
-                    if (!self::consumeVerifyCode('register', $phone, $code, 'sms')) {
+                    $code = input_text('sms_code', '', 7, 'post');
+                    if (!VerificationService::consume('register', $phone, $code, 'sms')) {
                         $error = theme_t('theme.front.sms_code_invalid', array(), '短信验证码错误或已过期');
                         break;
                     }
                 }
 
                 // 公开注册只能产生 role=user（功能红线）
-                $userId = DB::insert('users', array(
-                    'username'            => $username,
-                    'nickname'            => $nickname !== '' ? $nickname : $username,
-                    'password'            => password_hash($password, PASSWORD_DEFAULT),
-                    'email'               => $email !== '' ? $email : null,
-                    'phone'               => $phone,
-                    'avatar'              => '',
-                    'role'                => 'user',
-                    'status'              => 1,
-                    'password_changed_at' => now(),
-                    'login_fail'          => 0,
-                    'locked_until'        => null,
-                    'created_at'          => now(),
-                ));
+                try {
+                    $userId = UserService::create(array(
+                        'username'            => $username,
+                        'nickname'            => $nickname !== '' ? $nickname : $username,
+                        'password'            => password_hash($password, PASSWORD_DEFAULT),
+                        'email'               => $email !== '' ? $email : null,
+                        'phone'               => $phone,
+                        'avatar'              => '',
+                        'role'                => 'user',
+                        'status'              => 1,
+                        'password_changed_at' => now(),
+                        'login_fail'          => 0,
+                        'locked_until'        => null,
+                        'created_at'          => now(),
+                    ));
+                } catch (UserConflictException $ex) {
+                    $field = $ex->getMessage();
+                    $keys = array('username' => 'username_taken', 'email' => 'email_taken', 'phone' => 'phone_taken');
+                    $key = isset($keys[$field]) ? $keys[$field] : 'throttled';
+                    blog_log('user', 'user.register', 'fail', array('reason' => $field));
+                    $error = theme_t('theme.front.' . $key, array(), '信息已被占用或操作过于频繁，请重试');
+                    break;
+                }
                 blog_log('user', 'user.register', 'success', array('user_id' => $userId, 'username' => $username));
                 do_action('user_register', $userId, array(
                     'username' => $username, 'email' => $email, 'phone' => $phone,
@@ -571,6 +476,9 @@ class Front
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             Csrf::verifyOrDie();
+            if (!ip_throttle_allow('password_reset', 10)) {
+                self::tooManyRequests();
+            }
             $account = input_text('account', '', 128, 'post');
             $user = null;
             if ($account !== '') {
@@ -580,7 +488,7 @@ class Front
                     $user = DB::query('users')->where('username', '=', $account)->first();
                 }
             }
-            $code = input_text('code', '', 6, 'post');
+            $code = input_text('code', '', 7, 'post');
             $newPassword = input_password('new_password');
             $newPassword2 = input_password('new_password2');
 
@@ -612,23 +520,16 @@ class Front
                 // target/channel 解析必须与 verifySend 的发送侧完全一致：
                 // 用户名账号在"有手机号但短信插件未启用"时，发送侧走邮箱，
                 // 核验侧若按手机号查询将永远无法匹配（找回密码功能性损坏）
-                if (strpos($account, '@') !== false) {
-                    $target = $user['email'];
-                    $channel = 'email';
-                } elseif (!empty($user['phone']) && $smsEnabled) {
-                    $target = $user['phone'];
-                    $channel = 'sms';
-                } else {
-                    $target = $user['email'];
-                    $channel = 'email';
-                }
+                $destination = VerificationService::resetDestination($user, $account);
+                $target = $destination['target'];
+                $channel = $destination['channel'];
                 if (empty($target)) {
                     // 统一话术：未绑定联系方式也按"账号可能不存在"处理，防止枚举
                     $error = theme_t('theme.front.reset_generic', array(), '若账号存在且信息正确，密码将被重置');
                     break;
                 }
                 // 原子消费验证码：核验与标记已用在同一条件更新中完成，无并发复用窗口
-                if (!self::consumeVerifyCode('reset', $target, $code, $channel)) {
+                if (!VerificationService::consume('reset', $target, $code, $channel)) {
                     // 统一话术：验证码错误不暴露"该账号确实存在"（验证码仅真实账号能收到）
                     $error = theme_t('theme.front.reset_generic', array(), '若账号存在且信息正确，密码将被重置');
                     break;
@@ -657,6 +558,29 @@ class Front
         ));
     }
 
+    /** 统一返回限流状态，避免调用方继续执行昂贵查询或写入。 */
+    private static function tooManyRequests()
+    {
+        http_response_code(429);
+        header('Retry-After: 60');
+        exit(e(theme_t('theme.front.throttled', array(), '操作过于频繁，请稍后再试')));
+    }
+
+    /** 评论增改删共享额度，防止切换动作或轮换 IP 持续灌入正文及审计快照。 */
+    private static function checkCommentQuota()
+    {
+        $identity = 'user:' . Auth::id();
+        if (!RateLimiter::allowFor('comment', $identity, 10)
+            || !RateLimiter::allowFor('comment', $identity, 200, 86400)
+            || !ip_throttle_allow('comment_write', 30)) {
+            // 同一账号每分钟记录一次拒绝，保留证据并限制审计写放大。
+            if (RateLimiter::allowFor('comment_denied', $identity, 1)) {
+                blog_log('comment', 'comment.throttled', 'fail', array());
+            }
+            self::tooManyRequests();
+        }
+    }
+
     /** 评论提交（POST + CSRF + 登录） */
     private static function commentSave()
     {
@@ -669,6 +593,7 @@ class Front
             redirect(Router::url('login'));
         }
         Auth::require_cap('comment');
+        self::checkCommentQuota();
 
         $postId = input_int('post_id', 0, 'post');
         $parentId = input_int('parent_id', 0, 'post');
@@ -733,7 +658,7 @@ class Front
         flash_set('success', $data['status'] === 'pending'
             ? theme_t('theme.front.comment_pending', array(), '评论已提交，等待审核')
             : theme_t('theme.front.comment_success', array(), '评论发表成功'));
-        redirect($back);
+        redirect(self::commentBackUrl(array_merge($data, array('id' => $commentId)), '#comment-' . $commentId));
     }
 
     /** 评论所属文章的回跳 URL（可带锚点定位回原评论） */
@@ -744,7 +669,10 @@ class Front
         if (!$post) {
             return Router::url('home');
         }
-        return Router::url('post', array('slug' => (string) $post['slug'], 'id' => (int) $post['id'])) . $anchor;
+        return Router::url('post', array(
+            'slug' => (string) $post['slug'], 'id' => (int) $post['id'],
+            'comment_page' => CommentQuery::pageOf($comment, Auth::id()),
+        )) . $anchor;
     }
 
     /** 修改自己的评论（POST + CSRF + 登录 + edit_own_comments） */
@@ -759,6 +687,7 @@ class Front
             redirect(Router::url('login'));
         }
         Auth::require_cap('edit_own_comments');
+        self::checkCommentQuota();
 
         $commentId = input_int('comment_id', 0, 'post');
         $content = input_text('content', '', 2000, 'post');
@@ -825,6 +754,7 @@ class Front
             redirect(Router::url('login'));
         }
         Auth::require_cap('delete_own_comments');
+        self::checkCommentQuota();
 
         $commentId = input_int('comment_id', 0, 'post');
         $comment = DB::query('comments')->where('id', '=', $commentId)->first();
@@ -897,13 +827,9 @@ class Front
             } else {
                 $user = DB::query('users')->where('username', '=', $account)->first();
                 if ($user) {
-                    if (!empty($user['phone']) && get_verify_provider('sms') !== null) {
-                        $channel = 'sms';
-                        $target = $user['phone'];
-                    } else {
-                        $channel = 'email';
-                        $target = (string) $user['email'];
-                    }
+                    $destination = VerificationService::resetDestination($user, $account);
+                    $channel = $destination['channel'];
+                    $target = $destination['target'];
                 }
             }
             // 不暴露账号是否存在：统一提示已发送（若真实存在才会收到验证码）
@@ -926,56 +852,17 @@ class Front
             json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_channel_off', array(), '该渠道未启用验证码插件')));
         }
 
-        // 按目标加命名锁：60s 间隔/每日上限/实际发送必须互斥完成，
-        // 否则并发请求同时通过 count()==0 检查会超限群发（TOCTOU）
-        // 邮箱查询使用不区分大小写的排序规则，锁键也须归一，避免大小写别名分到不同锁。
-        $lockName = 'vsend_' . md5($channel . '|' . strtolower($target));
-        if (!DB::lock($lockName, 5)) {
-            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'lock_timeout'));
-            json_out(array('code' => 1, 'msg' => theme_t('theme.front.throttled', array(), '操作过于频繁，请稍后再试')));
-        }
-
-        // 频率限制：60s 重发间隔
-        $recent = DB::query('verify_codes')
-            ->where('scene', '=', $scene)
-            ->where('target', '=', $target)
-            ->where('created_at', '>', date('Y-m-d H:i:s', time() - 60))
-            ->count();
-        if ($recent > 0) {
-            DB::unlock($lockName);
-            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'resend_interval'));
-            json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_retry', array(), '发送过于频繁，请 60 秒后重试')));
-        }
-        // 每日上限：同目标每日 ≤10 条
-        $today = DB::query('verify_codes')
-            ->where('target', '=', $target)
-            ->where('created_at', '>', date('Y-m-d 00:00:00'))
-            ->count();
-        if ($today >= 10) {
-            DB::unlock($lockName);
-            blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'daily_limit'));
-            json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_daily_limit', array(), '今日发送次数已达上限')));
-        }
-
-        try {
-            $code = (string) random_int(100000, 999999);
-            $handled = apply_filters('send_verify_code', false, $scene, $target, $channel, $code);
-        } catch (Throwable $t) {
-            // 捕 Throwable 而非 Exception：插件抛 Error/TypeError 同样必须走到解锁
-            $handled = false;
-        }
-        // 发送裁决完成即释放锁：插件落库验证码在过滤器内完成，锁保护的是
-        // "检查配额→插件写入"这一临界区，发送结果不再依赖持锁
-        DB::unlock($lockName);
-        if ($handled === true) {
-            // 验证码发送必须留痕（等保审计；target 由 Logger 自动脱敏）
-            blog_log('verify', 'verify.send', 'success', array(
-                'scene' => $scene, 'channel' => $channel, 'target' => $target,
-            ));
-            json_out(array('code' => 0, 'msg' => theme_t('theme.front.verify_sent', array(), '验证码已发送')));
-        }
-        blog_log('verify', 'verify.send', 'fail', array('scene' => $scene, 'channel' => $channel, 'target' => $target, 'reason' => 'provider_failed'));
-        json_out(array('code' => 1, 'msg' => theme_t('theme.front.verify_unavailable', array(), '发送渠道不可用')));
+        $result = VerificationService::send($scene, $target, $channel);
+        $messages = array(
+            'sent' => array('theme.front.verify_sent', '验证码已发送'),
+            'throttled' => array('theme.front.throttled', '操作过于频繁，请稍后再试'),
+            'retry' => array('theme.front.verify_retry', '发送过于频繁，请 60 秒后重试'),
+            'daily_limit' => array('theme.front.verify_daily_limit', '每日发送次数已达上限'),
+            'channel_off' => array('theme.front.verify_channel_off', '该渠道未启用验证码插件'),
+            'unavailable' => array('theme.front.verify_unavailable', '发送渠道不可用'),
+        );
+        $message = $messages[$result];
+        json_out(array('code' => $result === 'sent' ? 0 : 1, 'msg' => theme_t($message[0], array(), $message[1])));
     }
 
     /**
@@ -987,69 +874,7 @@ class Front
      */
     public static function consumeVerifyCode($scene, $target, $code, $channel)
     {
-        $pluginResult = apply_filters('verify_code_check', null, $scene, $target, $code, $channel);
-        if ($pluginResult !== null) {
-            $ok = (bool) $pluginResult;
-        } else {
-            $ok = self::localConsumeCode($scene, $target, $code, $channel);
-        }
-        // 核验行为留痕（等保审计；target 由 Logger 自动脱敏）
-        blog_log('verify', 'verify.check', $ok ? 'success' : 'fail', array(
-            'scene' => $scene, 'channel' => $channel, 'target' => $target,
-        ));
-        return $ok;
-    }
-
-    /** 本地 verify_codes 表核验 + 原子标记已用 */
-    private static function localConsumeCode($scene, $target, $code, $channel)
-    {
-        // 错误容忍次数归声明者插件管理（按渠道声明取 slug，不硬编码插件名）；
-        // 内核仅负责范围钳制（1-5），无声明者取缺省 2
-        $provider = get_verify_provider($channel);
-        $maxAttempts = $provider !== null
-            ? max(1, min(5, (int) plugin_option($provider, 'max_attempts', 2)))
-            : 2;
-        // 与发送共用目标锁：错误计数、消费与重发互斥，不能靠读取后写回抵抗并发猜码。
-        $lockName = 'vsend_' . md5($channel . '|' . strtolower($target));
-        if (!DB::lock($lockName, 5)) {
-            return false;
-        }
-        try {
-            // 必须裁决最新一条；过滤 used=0 会在新码消费后重新暴露仍未过期的旧码。
-            $row = DB::query('verify_codes')
-                ->where('scene', '=', $scene)
-                ->where('target', '=', $target)
-                ->where('channel', '=', $channel)
-                ->orderBy('id', 'DESC')
-                ->first();
-            if (!$row || (int) $row['used'] !== 0
-                || strtotime($row['expires_at']) <= time()
-                || (int) $row['attempts'] >= $maxAttempts
-            ) {
-                return false;
-            }
-            if (!hash_equals((string) $row['code'], (string) $code)) {
-                $fail = DB::query('verify_codes')
-                    ->where('id', '=', (int) $row['id'])
-                    ->where('used', '=', 0)
-                    ->increment('attempts');
-                if ($fail !== false && $fail >= $maxAttempts) {
-                    DB::query('verify_codes')->where('id', '=', (int) $row['id'])
-                        ->where('used', '=', 0)->update(array('used' => 1));
-                }
-                return false;
-            }
-            // 除一次性标记外，提交时复检有效期与尝试次数，避免等待期间越过边界。
-            $affected = DB::query('verify_codes')
-                ->where('id', '=', (int) $row['id'])
-                ->where('used', '=', 0)
-                ->where('attempts', '<', $maxAttempts)
-                ->where('expires_at', '>', now())
-                ->update(array('used' => 1));
-            return $affected > 0;
-        } finally {
-            DB::unlock($lockName);
-        }
+        return VerificationService::consume($scene, $target, $code, $channel);
     }
 
     /** 统一 404 页 */

@@ -397,6 +397,56 @@ p { margin-bottom: 1.2em; }
     vertical-align: middle;
 }
 
+/* Obsidian Callout（内核 core/Markdown.php 解析 > [!type] 输出，
+   标题色块用纯 CSS 绘制，不引外部图标资源） */
+.article-content .callout {
+    --callout-color: var(--text-secondary);
+    margin: 1.5em 0;
+    padding: 14px 18px;
+    border-left: 3px solid var(--callout-color);
+    background: var(--bg-sidebar);
+    border-radius: 0 var(--card-radius) var(--card-radius) 0;
+    font-size: 16px; line-height: 1.8;
+}
+.article-content .callout-title {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 0.6em;
+    font-weight: 600; color: var(--callout-color);
+}
+/* 标题前旋转方块：宣纸印章风，呼应置顶印章与引用标记 */
+.article-content .callout-title::before {
+    content: "";
+    flex-shrink: 0;
+    width: 8px; height: 8px;
+    background: var(--callout-color);
+    transform: rotate(45deg);
+}
+.article-content .callout-content > :last-child { margin-bottom: 0; }
+.article-content .callout-content p { margin-bottom: 0.8em; }
+.article-content .callout-content ul,
+.article-content .callout-content ol { margin: 0.6em 0 0.8em 1.4em; }
+.article-content .callout-content li { margin-bottom: 0.3em; }
+.article-content .callout-content pre { margin: 0.8em 0; padding: 32px 16px 14px; }
+.article-content .callout-content .table-wrap { margin: 0.8em 0; }
+.article-content .callout-content .tex-block { margin: 0.8em 0; }
+.article-content .callout-content blockquote { margin: 0.8em 0; background: var(--bg-card); }
+.article-content .callout-content .callout { background: var(--bg-card); }
+
+/* 各类型语义色：只改 --callout-color，标题与色块同步取色 */
+.article-content .callout-note { --callout-color: #6B6B6B; }
+.article-content .callout-abstract { --callout-color: #4A7C7E; }
+.article-content .callout-info { --callout-color: #3E6EA8; }
+.article-content .callout-todo { --callout-color: #5A6FA8; }
+.article-content .callout-tip { --callout-color: #5E8C4A; }
+.article-content .callout-success { --callout-color: #3F8A5E; }
+.article-content .callout-question { --callout-color: #7A6BA8; }
+.article-content .callout-warning { --callout-color: #B8862F; }
+.article-content .callout-failure { --callout-color: #C0703A; }
+.article-content .callout-danger { --callout-color: #9E3B2B; }
+.article-content .callout-bug { --callout-color: #8A5A9E; }
+.article-content .callout-example { --callout-color: #6B8E9E; }
+.article-content .callout-quote { --callout-color: #8A7F6B; }
+
 /* ===== 评论区 ===== */
 .comments-area { max-width: var(--content-max); margin: 40px auto 0; }
 .comments-title { font-size: 20px; font-weight: 600; margin-bottom: 24px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); }
@@ -801,6 +851,20 @@ html.darkmode .post-card:hover { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); }
 html.darkmode .form-error { background: rgba(200, 100, 80, 0.12); border-color: #C86450; color: #D98A7A; }
 html.darkmode .field-error,
 html.darkmode .pwd-match.err { color: #D98A7A; }
+/* Callout 类型色在墨色底上调亮，保证暗色模式下的对比度 */
+html.darkmode .article-content .callout-note { --callout-color: #A0A0A0; }
+html.darkmode .article-content .callout-abstract { --callout-color: #7FC6C0; }
+html.darkmode .article-content .callout-info { --callout-color: #7FB0E0; }
+html.darkmode .article-content .callout-todo { --callout-color: #9AA8E0; }
+html.darkmode .article-content .callout-tip { --callout-color: #8FC97A; }
+html.darkmode .article-content .callout-success { --callout-color: #6FCB92; }
+html.darkmode .article-content .callout-question { --callout-color: #B9A6E8; }
+html.darkmode .article-content .callout-warning { --callout-color: #E0B45F; }
+html.darkmode .article-content .callout-failure { --callout-color: #E09A6B; }
+html.darkmode .article-content .callout-danger { --callout-color: #E08573; }
+html.darkmode .article-content .callout-bug { --callout-color: #D19AE0; }
+html.darkmode .article-content .callout-example { --callout-color: #93B8C6; }
+html.darkmode .article-content .callout-quote { --callout-color: #C0B49C; }
 
 /* ===== 减少动态偏好：禁用平滑滚动与一切过渡/微动效 ===== */
 @media (prefers-reduced-motion: reduce) {

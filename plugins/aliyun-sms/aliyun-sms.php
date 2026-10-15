@@ -56,7 +56,7 @@ function aliyun_sms_client($cfg = null)
  */
 function aliyun_sms_send($handled, $scene, $target, $channel, $code)
 {
-    if ($handled === true || $channel !== 'sms') {
+    if ($handled === true || $channel !== 'sms' || get_verify_provider('sms') !== 'aliyun-sms') {
         return $handled;
     }
     $cfg = aliyun_sms_config();
@@ -94,16 +94,7 @@ function aliyun_sms_send($handled, $scene, $target, $channel, $code)
 
     // 本地生成码模式：内核负责核验，写入可核验行（used=0），
     // 错误容忍次数/有效期/原子消费均由内核本地表机制接管
-    DB::insert('verify_codes', array(
-        'scene'      => $scene,
-        'target'     => $target,
-        'code'       => $code,
-        'channel'    => 'sms',
-        'expires_at' => date('Y-m-d H:i:s', time() + $cfg['valid_time'] * 60),
-        'used'       => 0,
-        'attempts'   => 0,
-        'created_at' => now(),
-    ));
+    VerificationService::recordSent($scene, $target, $code, 'sms', $cfg['valid_time'] * 60);
     plugin_log('aliyun-sms.send', array('result' => 'success', 'scene' => $scene));
     return true;
 }

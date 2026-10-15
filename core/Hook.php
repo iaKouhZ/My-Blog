@@ -3,6 +3,7 @@
  * 钩子机制：语义与 WordPress 一致的 add_action/do_action/add_filter/apply_filters
  */
 defined('APP_BOOT') or exit;
+require_once __DIR__ . '/PluginContext.php';
 
 class Hook
 {
@@ -19,7 +20,7 @@ class Hook
      */
     public static function add($hook, $callback, $priority = 10)
     {
-        $owner = class_exists('Plugin') ? Plugin::currentSlug() : null;
+        $owner = PluginContext::current();
         self::$hooks[$hook][$priority][] = array('cb' => $callback, 'owner' => $owner);
         ksort(self::$hooks[$hook]);
     }
@@ -49,12 +50,7 @@ class Hook
         }
         foreach (self::$hooks[$hook] as $entries) {
             foreach ($entries as $entry) {
-                // 执行期间恢复回调归属插件的执行上下文（写入命名空间校验依赖此上下文）
-                $prev = class_exists('Plugin') ? Plugin::setCurrentSlug($entry['owner']) : null;
-                call_user_func_array($entry['cb'], $args);
-                if (class_exists('Plugin')) {
-                    Plugin::setCurrentSlug($prev);
-                }
+                PluginContext::run($entry['owner'], $entry['cb'], $args);
             }
         }
     }
@@ -74,13 +70,8 @@ class Hook
         }
         foreach (self::$hooks[$hook] as $entries) {
             foreach ($entries as $entry) {
-                // 同 doAction：执行期间恢复回调归属插件的执行上下文
-                $prev = class_exists('Plugin') ? Plugin::setCurrentSlug($entry['owner']) : null;
                 $params = array_merge(array($value), $args);
-                $value = call_user_func_array($entry['cb'], $params);
-                if (class_exists('Plugin')) {
-                    Plugin::setCurrentSlug($prev);
-                }
+                $value = PluginContext::run($entry['owner'], $entry['cb'], $params);
             }
         }
         return $value;

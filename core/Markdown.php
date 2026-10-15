@@ -7,11 +7,14 @@ defined('APP_BOOT') or exit;
 
 class Markdown
 {
-    /** @var array 代码块暂存 */
-    private $codeBlocks = array();
-
     /** @var array 公式暂存 */
     private $mathBlocks = array();
+
+    /** @var string 每次渲染独立的占位前缀，避免正文伪造内部占位 */
+    private $mathPrefix;
+
+    /** @var array|null 同次渲染只构造一次类型表，嵌套块沿用同一声明 */
+    private $calloutTypes = null;
 
     /**
      * 渲染入口：Markdown 原文 → 过滤后的安全 HTML
@@ -32,55 +35,28 @@ class Markdown
     {
         $text = str_replace(array("\r\n", "\r"), "\n", $markdown);
 
-        // 1. 先提取围栏代码块，避免其中内容被解析
-        $text = preg_replace_callback('/^```([^\n`]*)\n([\s\S]*?)^```\s*$/m', array($this, 'stashCode'), $text);
-
-        // 2. 提取数学公式占位（块级 $$...$$ 与行内 $...$）
-        $text = preg_replace_callback('/\$\$([\s\S]+?)\$\$/', array($this, 'stashBlockMath'), $text);
-        $text = preg_replace_callback('/(?<![\$\\\\])\$([^\$\n]+?)\$(?!\$)/', array($this, 'stashInlineMath'), $text);
-
-        // 3. 块级解析
-        $html = $this->parseBlocks($text);
-
-        // 4. 服务端白名单过滤
-        $html = self::sanitize($html);
-
-        // 5. 还原公式占位（内容已转义）
-        $html = $this->restoreMath($html);
-
-        return $html;
-    }
-
-    /** 围栏代码块暂存 */
-    private function stashCode($m)
-    {
-        $lang = trim($m[1]);
-        $this->codeBlocks[] = array('lang' => $lang, 'code' => $m[2]);
-        $index = count($this->codeBlocks) - 1;
-        return "\n@@CODEBLOCK" . $index . "@@\n";
-    }
-
-    /** 块级公式暂存 */
-    private function stashBlockMath($m)
-    {
-        $this->mathBlocks[] = array('block' => true, 'tex' => $m[1]);
-        $index = count($this->mathBlocks) - 1;
-        return "\n@@MATHBLOCK" . $index . "@@\n";
+        $this->mathPrefix = '@@CBMATH' . bin2hex(random_bytes(8)) . '_';
+        // 引用前缀必须先由所属块剥离，代码与公式随后在同一层级识别。
+        // 最终过滤放在所有占位还原之后，保证 HTML 安全边界只有一个出口。
+        return self::sanitize($this->restoreMath($this->parseBlocks($text)));
     }
 
     /** 行内公式暂存 */
     private function stashInlineMath($m)
     {
-        $this->mathBlocks[] = array('block' => false, 'tex' => $m[1]);
+        $this->mathBlocks[] = array('tex' => $m[1]);
         $index = count($this->mathBlocks) - 1;
-        return '@@MATHBLOCK' . $index . '@@';
+        return $this->mathPrefix . $index . '@@';
     }
 
     /**
      * 块级结构解析（按行扫描）
      */
-    private function parseBlocks($text)
+    private function parseBlocks($text, $depth = 0)
     {
+        if ($depth >= 64) {
+            return '<p>' . e($text) . '</p>';
+        }
         $lines = explode("\n", $text);
         $html = '';
         $paragraph = array();
@@ -95,9 +71,9 @@ class Markdown
                 $paragraph = array();
             }
         };
-        $flushQuote = function () use (&$inQuote, &$quoteBuf, &$html) {
+        $flushQuote = function () use (&$inQuote, &$quoteBuf, &$html, $depth) {
             if ($inQuote) {
-                $html .= '<blockquote><p>' . $this->parseInline(implode(' ', $quoteBuf)) . '</p></blockquote>';
+                $html .= '<blockquote>' . $this->parseBlocks(implode("\n", $quoteBuf), $depth + 1) . '</blockquote>';
                 $inQuote = false;
                 $quoteBuf = array();
             }
@@ -112,11 +88,62 @@ class Markdown
         for ($i = 0; $i < $total; $i++) {
             $line = $lines[$i];
 
+            // 代码围栏先于其它块判定，其内容不再进入公式、Callout 或行内解析。
+            if (preg_match('/^```([^`]*)$/', $line, $fence)) {
+                $flushQuote();
+                $flushParagraph();
+                $closeLists();
+                $code = array();
+                while (++$i < $total && !preg_match('/^```\s*$/', $lines[$i])) {
+                    $code[] = $lines[$i];
+                }
+                $html .= $this->renderCodeBlock(trim($fence[1]), implode("\n", $code));
+                continue;
+            }
+
+            // 块级公式只消费当前层级的行，不跨越外层引用或 Callout 的边界。
+            if (preg_match('/^\s*\$\$(.*)$/', $line, $mathOpen)) {
+                $math = $mathOpen[1];
+                $end = $i;
+                $closed = strpos($math, '$$') !== false;
+                while (!$closed && $end + 1 < $total) {
+                    $math .= "\n" . $lines[++$end];
+                    $closed = strpos($math, '$$') !== false;
+                }
+                if ($closed) {
+                    $flushQuote();
+                    $flushParagraph();
+                    $closeLists();
+                    $parts = explode('$$', $math, 2);
+                    $html .= '<div class="tex-block">' . e($parts[0]) . '</div>';
+                    $i = $end;
+                    if (trim($parts[1]) !== '') {
+                        $paragraph[] = $parts[1];
+                    }
+                    continue;
+                }
+            }
+
+            // Obsidian callout（> [!type] 标题）：须早于普通引用判定，
+            // 否则会被并进上方 blockquote 的缓冲；命中后一次性吃掉整块引用行
+            $callout = $this->parseCalloutOpen($line);
+            if ($callout !== null) {
+                $flushQuote();
+                $flushParagraph();
+                $closeLists();
+                $body = $this->collectCalloutBody($lines, $i);
+                $html .= $this->renderCallout($callout['type'], $callout['title'], $body['lines'], $callout['meta'], $depth);
+                $i = $body['next'] - 1;
+                continue;
+            }
+
             // 表格（当前行含 | 且下一行为分隔行）
             if (strpos($line, '|') !== false && isset($lines[$i + 1])
                 && preg_match('/^\s*\|?[\s:|-]+\|?\s*$/', $lines[$i + 1])
                 && strpos($lines[$i + 1], '-') !== false) {
+                $flushQuote();
                 $flushParagraph();
+                $closeLists();
                 $tableBuf = array($line);
                 $i++;
                 while (isset($lines[$i + 1]) && strpos($lines[$i + 1], '|') !== false) {
@@ -127,28 +154,10 @@ class Markdown
                 continue;
             }
 
-            // 代码块占位行
-            if (preg_match('/^@@CODEBLOCK(\d+)@@$/', trim($line), $m)) {
-                $flushParagraph();
-                $html .= $this->renderCodeBlock((int) $m[1]);
-                continue;
-            }
-            // 公式占位行：块级 $$ 占位输出 div；单独成行的行内 $ 占位仍按行内处理（包 p），
-            // 若包 div 会形成 div.tex-block > span.tex-inline 嵌套，前端会对同一公式渲染两次
-            if (preg_match('/^@@MATHBLOCK(\d+)@@$/', trim($line), $m)) {
-                $flushParagraph();
-                $mathIndex = (int) $m[1];
-                if (isset($this->mathBlocks[$mathIndex]) && $this->mathBlocks[$mathIndex]['block']) {
-                    $html .= '<div class="tex-block">@@MATHBLOCK' . $mathIndex . '@@</div>';
-                } else {
-                    $html .= '<p>@@MATHBLOCK' . $mathIndex . '@@</p>';
-                }
-                continue;
-            }
-
             // 引用
             if (preg_match('/^>\s?(.*)$/', $line, $m)) {
                 $flushParagraph();
+                $closeLists();
                 $inQuote = true;
                 $quoteBuf[] = $m[1];
                 continue;
@@ -157,6 +166,7 @@ class Markdown
 
             // 标题
             if (preg_match('/^(#{1,6})\s+(.+)$/', $line, $m)) {
+                $flushQuote();
                 $flushParagraph();
                 $closeLists();
                 $level = strlen($m[1]);
@@ -166,13 +176,16 @@ class Markdown
 
             // 分隔线
             if (preg_match('/^\s*(-{3,}|\*{3,}|_{3,})\s*$/', $line)) {
+                $flushQuote();
                 $flushParagraph();
+                $closeLists();
                 $html .= '<hr>';
                 continue;
             }
 
             // 无序列表
             if (preg_match('/^\s*[-*+]\s+(.+)$/', $line, $m)) {
+                $flushQuote();
                 $flushParagraph();
                 if (empty($listStack) || end($listStack) !== 'ul') {
                     $closeLists();
@@ -187,6 +200,7 @@ class Markdown
 
             // 有序列表
             if (preg_match('/^\s*\d+\.\s+(.+)$/', $line, $m)) {
+                $flushQuote();
                 $flushParagraph();
                 if (empty($listStack) || end($listStack) !== 'ol') {
                     $closeLists();
@@ -223,11 +237,13 @@ class Markdown
     {
         // 行内代码优先保护
         $codes = array();
-        $text = preg_replace_callback('/`([^`]+)`/', function ($m) use (&$codes) {
+        $codePrefix = '@@CBINLINE' . bin2hex(random_bytes(8)) . '_';
+        $text = preg_replace_callback('/`([^`]+)`/', function ($m) use (&$codes, $codePrefix) {
             $codes[] = '<code>' . e($m[1]) . '</code>';
-            return '@@INLINECODE' . (count($codes) - 1) . '@@';
+            return $codePrefix . (count($codes) - 1) . '@@';
         }, $text);
 
+        $text = preg_replace_callback('/(?<![\$\\\\])\$([^\$\n]+?)\$(?!\$)/', array($this, 'stashInlineMath'), $text);
         $text = e($text);
 
         // 图片
@@ -243,7 +259,7 @@ class Markdown
         $text = str_replace("\n", '<br>', $text);
 
         // 还原行内代码
-        $text = preg_replace_callback('/@@INLINECODE(\d+)@@/', function ($m) use ($codes) {
+        $text = preg_replace_callback('/' . preg_quote($codePrefix, '/') . '(\d+)@@/', function ($m) use ($codes) {
             return $codes[(int) $m[1]];
         }, $text);
 
@@ -277,14 +293,171 @@ class Markdown
     }
 
     /** 围栏代码块渲染 */
-    private function renderCodeBlock($index)
+    private function renderCodeBlock($lang, $code)
     {
-        if (!isset($this->codeBlocks[$index])) {
-            return '';
+        $cls = $lang !== '' ? ' class="language-' . e($lang) . '"' : '';
+        return '<pre><code' . $cls . '>' . e(rtrim($code, "\n")) . '</code></pre>';
+    }
+
+    /**
+     * Callout 类型表：规范类型 => array(别名数组, 语言键, 中文缺省标题)
+     *
+     * 类型标识符最终会写进 class 属性，因此一律经本表白名单映射：
+     * 未注册类型降级为 note；插件可经 markdown_callout_types 过滤器扩展，
+     * 非法标识符（不匹配 ^[a-z][a-z0-9-]*$）直接丢弃，防止 class 注入
+     *
+     * @return array array(别名 => 规范类型, 规范类型 => 元信息)
+     */
+    private function calloutTypes()
+    {
+        if ($this->calloutTypes !== null) {
+            return $this->calloutTypes;
         }
-        $block = $this->codeBlocks[$index];
-        $cls = $block['lang'] !== '' ? ' class="language-' . e($block['lang']) . '"' : '';
-        return '<pre><code' . $cls . '>' . e(rtrim($block['code'], "\n")) . '</code></pre>';
+        $defs = array(
+            'note' => array(array(), 'theme.callout.note', '笔记'),
+            'abstract' => array(array('summary', 'tldr'), 'theme.callout.abstract', '摘要'),
+            'info' => array(array(), 'theme.callout.info', '信息'),
+            'todo' => array(array(), 'theme.callout.todo', '待办'),
+            'tip' => array(array('hint', 'important'), 'theme.callout.tip', '提示'),
+            'success' => array(array('check', 'done'), 'theme.callout.success', '成功'),
+            'question' => array(array('help', 'faq'), 'theme.callout.question', '问题'),
+            'warning' => array(array('caution', 'attention'), 'theme.callout.warning', '注意'),
+            'failure' => array(array('fail', 'missing'), 'theme.callout.failure', '失败'),
+            'danger' => array(array('error'), 'theme.callout.danger', '危险'),
+            'bug' => array(array(), 'theme.callout.bug', '缺陷'),
+            'example' => array(array(), 'theme.callout.example', '示例'),
+            'quote' => array(array('cite'), 'theme.callout.quote', '引述'),
+        );
+        // 兜底类型元信息：过滤器可能删掉 note，未识别类型仍需确定的降级目标
+        $note = $defs['note'];
+
+        $filtered = apply_filters('markdown_callout_types', $defs);
+        $alias = array();
+        $meta = array();
+        if (is_array($filtered)) {
+            foreach ($filtered as $canonical => $def) {
+                if (!is_array($def) || !self::isCalloutTypeName($canonical)) {
+                    continue;
+                }
+                $canonical = strtolower($canonical);
+                $names = isset($def[0]) && is_array($def[0]) ? $def[0] : array();
+                $meta[$canonical] = array(
+                    'title_key' => isset($def[1]) && is_string($def[1]) ? $def[1] : 'theme.callout.' . $canonical,
+                    'title_default' => isset($def[2]) && is_string($def[2]) ? $def[2] : $canonical,
+                );
+                $alias[$canonical] = $canonical;
+                foreach ($names as $name) {
+                    if (is_string($name) && self::isCalloutTypeName($name)) {
+                        $alias[strtolower($name)] = $canonical;
+                    }
+                }
+            }
+        }
+        if (!isset($meta['note'])) {
+            $meta['note'] = array('title_key' => $note[1], 'title_default' => $note[2]);
+            $alias['note'] = 'note';
+        }
+        return $this->calloutTypes = array($alias, $meta);
+    }
+
+    /** 类型标识符合法性校验（同时用于白名单与过滤器产出的清洗） */
+    private static function isCalloutTypeName($name)
+    {
+        return is_string($name) && (bool) preg_match('/^[a-z][a-z0-9-]*$/', strtolower($name));
+    }
+
+    /**
+     * 识别 callout 起始行
+     *
+     * @param string $line 原始行
+     * @return array|null array(type, title, meta)，非 callout 返回 null
+     */
+    private function parseCalloutOpen($line)
+    {
+        // [!type] 后可跟 +/- 折叠标记：本期仅识别并丢弃，不产出折叠结构
+        if (!preg_match('/^>\s*\[!([a-zA-Z][a-zA-Z0-9_-]*)\][+-]?[ \t]*(.*)$/', $line, $m)) {
+            return null;
+        }
+        $types = $this->calloutTypes();
+        $name = strtolower($m[1]);
+        $type = isset($types[0][$name]) ? $types[0][$name] : 'note';
+        return array('type' => $type, 'title' => trim($m[2]), 'meta' => $types[1][$type]);
+    }
+
+    /**
+     * 收集 callout 正文：连续引用行去掉 `> ` 前缀，允许中间夹空行
+     * （空行之后若非引用行则终止，尾部空行不计入正文）
+     *
+     * 空行本身不终结 callout（CommonMark 中引用块跨空行延续，支持多段正文），
+     * 但空行后紧跟另一个 `[!type]` 起始行时必须断开，否则相邻两个 callout
+     * 会被并进前一个的正文；嵌套 callout（`> > [!type]`）不在此处断开，
+     * 它的第二层 `>` 使 callout 起始正则不匹配
+     *
+     * @param array $lines 全部行
+     * @param int   $start 起始行行号
+     * @return array array('lines' => 正文行, 'next' => 下一个待处理行号)
+     */
+    private function collectCalloutBody(array $lines, $start)
+    {
+        $body = array();
+        $total = count($lines);
+        $pendingBlank = false;
+        $i = $start + 1;
+        while ($i < $total) {
+            $line = $lines[$i];
+            if (preg_match('/^>\s?(.*)$/', $line, $m)) {
+                if ($pendingBlank) {
+                    if ($this->parseCalloutOpen($line) !== null) {
+                        break;
+                    }
+                    $body[] = '';
+                }
+                $pendingBlank = false;
+                $body[] = $m[1];
+                $i++;
+                continue;
+            }
+            if (trim($line) === '') {
+                $pendingBlank = true;
+                $i++;
+                continue;
+            }
+            break;
+        }
+        return array('lines' => $body, 'next' => $i);
+    }
+
+    /**
+     * callout 渲染：结构仅用 div + class，不触碰 XSS 白名单
+     *
+     * @param string $type      规范类型
+     * @param string $title     标题原文（空则取类型默认标题）
+     * @param array  $bodyLines 已去引用前缀的正文行
+     * @param array  $meta      类型元信息
+     * @return string
+     */
+    private function renderCallout($type, $title, array $bodyLines, array $meta, $depth)
+    {
+        $text = implode("\n", $bodyLines);
+
+        if ($title !== '') {
+            $titleHtml = $this->parseInline($title);
+        } else {
+            $default = function_exists('theme_t')
+                ? theme_t($meta['title_key'], array(), $meta['title_default'])
+                : $meta['title_default'];
+            $titleHtml = e($default);
+        }
+
+        $content = $this->parseBlocks($text, $depth + 1);
+
+        $html = '<div class="callout callout-' . $type . '">'
+            . '<div class="callout-title">' . $titleHtml . '</div>';
+        // 仅有标题的 callout 不产出空内容容器，避免主题样式带出多余间距
+        if ($content !== '') {
+            $html .= '<div class="callout-content">' . $content . '</div>';
+        }
+        return $html . '</div>';
     }
 
     /** 简易表格解析 */
@@ -325,12 +498,8 @@ class Markdown
     private function restoreMath($html)
     {
         foreach ($this->mathBlocks as $index => $math) {
-            $tag = '@@MATHBLOCK' . $index . '@@';
-            // 块级公式不再包 div：parseBlocks 已为占位行输出带 class 的包裹层，
-            // 重复包裹会产生嵌套 .tex-block，导致前端重复渲染
-            $replacement = $math['block']
-                ? e($math['tex'])
-                : '<span class="tex-inline">' . e($math['tex']) . '</span>';
+            $tag = $this->mathPrefix . $index . '@@';
+            $replacement = '<span class="tex-inline">' . e($math['tex']) . '</span>';
             $html = str_replace($tag, $replacement, $html);
         }
         return $html;

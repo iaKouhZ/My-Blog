@@ -49,7 +49,17 @@
 ├── core/                  ← 内核（禁止 HTTP 直接访问，rewrite 屏蔽）
 │   ├── bootstrap.php      ← 内核引导：加载 config、DB、Session、Hook、Logger
 │   ├── Config.php
-│   ├── DB.php             ← PDO 封装（预处理、表前缀、查询构造辅助）
+│   ├── DB.php             ← PDO 封装（预处理、表前缀、查询构造、事务与原子 upsert）
+│   ├── Schema.php         ← 新装定义、显式升级与密码历史按需建表
+│   ├── VerificationService.php ← 前后台公共验证码业务
+│   ├── RateLimiter.php    ← IP 临时计数、按桶互斥与旧窗口迁入
+│   ├── UserService.php    ← 用户写入与联系方式锁内唯一性检查
+│   ├── PostQuery.php / CommentQuery.php ← 公开查询及稳定分页
+│   ├── PostService.php    ← 文章/导航事务与提交后通知
+│   ├── PluginContext.php ← 嵌套上下文及异常恢复
+│   ├── ThemeLocale.php / ThemeData.php ← 主题语言与公共数据
+│   ├── maintenance.php    ← CLI 显式结构升级（HTTP 禁止）
+│   ├── tests/            ← CLI 回归（不连接站点数据库）
 │   ├── Router.php         ← 伪静态路由解析与 URL 生成
 │   ├── Hook.php           ← add_action/do_action/add_filter/apply_filters
 │   ├── Logger.php         ← 统一日志组件
@@ -79,7 +89,7 @@
 │   │   └── highlight.js/  ← 按需语言包 + 主题 css
 │   ├── admin/             ← 后台自有 css/js
 │   └── langs/             ← 后台语言包（仅手动放置，禁止 HTTP 直接访问；预装 en_US.php）
-└── uploads/               ← 上传目录（头像 uploads/avatars/，文章图片按年月分目录）
+└── uploads/               ← 上传目录（头像与文章图片统一按年月分目录，内容哈希命名）
 ```
 
 ---
@@ -96,7 +106,8 @@
 | nickname | VARCHAR(64) | 显示昵称 |
 | password | VARCHAR(255) | `password_hash(PASSWORD_DEFAULT)` |
 | email | VARCHAR(128) UNIQUE | 可用于登录/找回密码 |
-| phone | VARCHAR(20) | 手机号，可用于短信验证 |
+| phone | VARCHAR(20) | 手机号，可用于短信验证；空串表示未填写 |
+| phone_identity | VARCHAR(20) GENERATED STORED UNIQUE | `NULLIF(phone, '')`，唯一约束非空手机号并允许多个未填号码 |
 | avatar | VARCHAR(255) | 头像路径，空则用默认头像 |
 | signature | VARCHAR(255) | 个性签名，用户在个人资料页自助设置，展示于作者页（注销用户匿名化时一并隐藏） |
 | role | ENUM('admin','editor','user') | **权限唯一判定字段** |
@@ -247,7 +258,7 @@ id / name / slug UNIQUE / description / sort。
 - 仪表盘：所有登录角色均显示时段问候（按早上/中午/晚上显示“昵称，XX好！欢迎访问站点名”）；全站统计（文章总数/已发布/待审核/评论/注册用户等）与审计日志预览**仅管理员可见**，控制器层不向 user/editor 提供该数据。
 - 后台 UI：`assets/admin/` 自有 css/js，左侧菜单 + 顶栏布局，响应式；菜单项按能力点动态显隐；导航侧栏固定不随页面滚动（对齐前台主题）；明暗模式切换（与前台默认主题共用 `cb-darkmode` 偏好键）；窄屏下侧栏为抽屉式（☰ 按钮 + 遮罩）。
 - 后台多语言（i18n）：`core/Lang.php` 提供 `Lang::t()`/模板助手 `admin_t()`，语义键 `admin.{模块}.{语义}`；中文基线包 `core/langs/zh_CN.php` 为最终降级方案（随内核，禁止删除），其余语言包（`return array(...)` 的 `xx_XX.php`，含预装 `en_US.php`）一律放 `assets/langs/`，仅允许手动放置、无后台上传入口；站点级选项 `admin_locale`（默认 `zh_CN`）在「站点设置」切换，查询链为 当前包 → 中文基线 → 原样返回键；`assets/langs/` 目录为空时后台自动保持中文。后台共享 JS（admin.js/verify.js/password_check.js/nav_sort.js）的提示语经视图注入 `window.CB_*` 覆盖实现，缺省保持中文、前台不受影响。
-- 头像上传：限 jpg/png/webp、≤2MB，服务端校验 MIME（fileinfo），重命名为随机文件名存 `uploads/avatars/`。
+- 头像上传：限 jpg/png/webp/gif、≤1MB，服务端校验 MIME（fileinfo），采用 `md5_file` 内容哈希命名并秒传去重，存 `uploads/年/月/`；文章配图上限 2MB。
 
 ---
 
@@ -278,9 +289,9 @@ id / name / slug UNIQUE / description / sort。
 - 开关关闭时以上检查全部短路跳过，不产生任何行为差异。
 
 ### 6.3 登录失败处理与会话安全（等保二级·身份鉴别 c/d）
-- **锁定**：同一账号连续失败 `login_max_fail`（默认 5）次 → 锁定 `login_lock_minutes`（默认 10）分钟（`users.login_fail` / `locked_until` 持久化，重启不丢；失败计数经 SQL 原子自增——`LAST_INSERT_ID` 表达式模式，并发失败请求不会互相覆盖计数）；锁定期内直接拒绝；成功登录后清零。另按 IP 维度做二级限流（同一 IP 每分钟 ≤20 次登录尝试，独立计数器实现，不依赖审计表聚合；计数器读-改-写经 MySQL 命名锁互斥，IPv6 客户端按 /64 前缀归一计数防地址轮换）。锁定/禁用/封禁/注销等状态的登录失败与密码错误统一提示，防止账号枚举（具体原因仅写入审计日志）。
+- **锁定**：同一账号连续失败 `login_max_fail`（默认 5）次 → 锁定 `login_lock_minutes`（默认 10）分钟（`users.login_fail` / `locked_until` 持久化，重启不丢；失败计数经 SQL 原子自增——`LAST_INSERT_ID` 表达式模式，并发失败请求不会互相覆盖计数）；锁定期内直接拒绝；成功登录后清零。另按 IP 维度做二级限流（同一 IP 每分钟 ≤20 次登录尝试，独立计数器实现，存现有 plugin_data 表的内核保留命名空间 __core_throttle，不依赖审计表聚合或全量配置缓存；计数器读-改-写经业务桶/IP 专属 MySQL 命名锁互斥，IPv6 客户端按 /64 前缀归一计数防地址轮换）。锁定/禁用/封禁/注销等状态的登录失败与密码错误统一提示，防止账号枚举（具体原因仅写入审计日志）。
 
-- **并发裁决与提示一致性**：用户名/邮箱解析为用户 ID 后取账号锁，锁内重读状态并完成失败计数、置锁或成功登录，防止旧快照清除并发生效的锁定。锁定触发的当次失败也统一为 `invalid_credentials`，仅审计保留锁定原因，不再依赖影子账号计数消除提示差异。IP 限流取锁后直接从数据库读取计数，不使用取锁前已加载的 Option 缓存；锁超时拒绝请求。
+- **并发裁决与提示一致性**：用户名/邮箱解析为用户 ID 后取账号锁，锁内重读状态并完成失败计数、置锁或成功登录，防止旧快照清除并发生效的锁定。锁定触发的当次失败也统一为 `invalid_credentials`，仅审计保留锁定原因，不再依赖影子账号计数消除提示差异。IP 限流取锁后直接从数据库读取计数，不使用取锁前已加载的 Option 缓存；首次迁入沿用旧 options.throttle_* 的有效窗口；锁超时拒绝请求。
 - **审计**：登录成功、登录失败（含锁定触发）、登出、管理员手动解锁、验证码发送与核验，全部写 logs（`category=auth/verify`，`result=success/fail`）。
 - **会话**：无操作 `session_timeout_minutes`（默认 30）分钟自动失效；登出时 `session_destroy()` 并使 cookie 失效（剩余信息保护）；登录成功 `session_regenerate_id(true)`；检测到 HTTPS 时 cookie 自动加 `Secure`；会话携带口令指纹（口令哈希的二级散列），改密（自助/找回/管理员重置）后其余既有会话指纹失配自动失效。
 - 登录成功清除认证前 CSRF token，后续按新会话重新生成；检测到禁用/封禁/注销或指纹失配时清除会话身份及 token；登出同步清除当前请求用户缓存。仪表盘审计日志预览同样记录 `security/log.view`。
@@ -329,6 +340,7 @@ id / name / slug UNIQUE / description / sort。
 | `front_head` / `front_footer` | action | 前台页头/页尾输出点 |
 | `admin_head` / `admin_footer` | action | 后台页头/页尾输出点 |
 | `post_content` | filter | 文章正文渲染后输出前 |
+| `markdown_callout_types` | filter | 正文 Callout 类型表（规范类型 => 别名/语言键/中文缺省标题），插件可注册自定义类型，非法标识符由内核丢弃 |
 | `front_posts` | filter | 首页/归档/搜索列表当前页文章（排序/修饰；分页已定，不宜移除） |
 | `comment_before_save` | filter | 评论入库前（可拦截/改写） |
 | `comment_write_allowed` | filter | 前台评论增/改/删统一拦截点（返回 false 拒绝，记审计；后台不受影响） |
@@ -357,8 +369,21 @@ id / name / slug UNIQUE / description / sort。
 
 本地验证码核验与发送共用 `vsend_` 目标锁（渠道 + 小写归一后的目标），防止邮箱大小写别名分到不同锁；错误计数原子递增，核验只裁决同场景/渠道/目标的最新记录，最新码消费、作废或过期后不得回退旧码。消费提交时复检 `used`、尝试次数与有效期，锁超时拒绝核验。接管 `verify_code_check` 的插件须自行实现相同的并发次数控制、最新码裁决与一次性消费契约。
 
-QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `ip_throttle_allow('qq_callback', 10)`，计数存于现有 options 的 `throttle_qq_callback_*`，IPv6 按 /64 归一。绑定 OpenID 查重与写入必须成功取得命名锁，否则拒绝写入；密码过期开启后，登录、绑定与解绑均服从内核到期判定。旧插件 `rl_*` 临时计数沿用既有到期清理，无需新增字段或迁移。
+QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `ip_throttle_allow('qq_callback', 10)`，计数经 RateLimiter 存于现有 plugin_data 的内核保留命名空间 __core_throttle，旧 options.throttle_qq_callback_* 窗口首次使用时迁入，IPv6 按 /64 归一。绑定 OpenID 查重与写入必须成功取得命名锁，否则拒绝写入；密码过期开启后，登录、绑定与解绑均服从内核到期判定。旧插件 `rl_*` 临时计数沿用既有到期清理，无需新增字段或迁移。
 插件多语言：`plugin_t($slug,$key,$args,$default,$lang)` + 插件自带 `langs/{xx_XX}.php`（zh_CN 基线必备、APP_BOOT 守卫），查找顺序为当前语言包 → 插件中文基线 → 中文缺省 → 键名；语言缺省取站点默认语言（`admin_locale`），外发邮件必须用站点默认语言。完整约定见 `plugins/README.md` §4.3。
+
+验证码公共业务归 `core/VerificationService.php`，前后台不再互相加载控制器；`Front::consumeVerifyCode()` 保留为兼容包装。
+发送插件经原有钩子接管后，可调用 `VerificationService::recordSent($scene,$target,$code,$channel,$ttl=600)` 登记，要求当前执行归属与渠道声明者一致，ttl 钳制 1–3600 秒；旧插件直接登记的契约仍兼容。
+`PluginContext` 独立管理嵌套归属，钩子、插件加载和设置页回调在异常时也恢复上下文。
+`post_saved` / `post_deleted` 在正文、导航或评论的核心事务提交后触发；插件异常单独审计 `post.hook_failed`，不回滚已提交数据。
+插件数据和配置使用原子 upsert；内核 `__core_throttle` 临时行不可由普通插件认领，沿用 plugin_data 的 expires_at 清理，不增加数据表。
+
+外部入口加固 API：`Router::url('custom', array('path'=>$path))` 统一生成插件路由链接（白名单路径，最长 200 字符）；
+`Auth::confirmCurrentPassword($password)` 共用口令登录的账号锁、失败计数与锁定期，登录和重验共享账号每分钟 20 次额度，调用方仍负责 POST/CSRF/权限；
+`Auth::passwordFingerprint($hash)` 供短期授权 state 绑定口令版本，不输出页面或日志；
+`RateLimiter::allowFor($bucket,$identity,$max,$windowSeconds=60)` 提供可信主体额度，窗口 1–86400 秒，TTL 不早于窗口结束，取锁失败拒绝。
+QQ 新增 `qqlogin/bind` → `front_route_qq_bind`（POST 发起绑定/换绑），与 `qqlogin/unbind` 共用 CSRF、edit_profile、密码到期拦截与当前密码重验；
+回调 state 绑定发起用户 ID 和口令指纹，通过全部校验后才消费，切换身份/改密/重放均拒绝。插件原有独立 QQ 登录凭据设计保留。
 
 ### 7.5 插件管理页（仅管理员）
 列表（名称/版本/作者/描述/状态）、启用、禁用、删除（删除目录，二次确认）、插件设置页入口。插件文件必须位于 `plugins/` 且头部元数据合法才会被发现。
@@ -375,7 +400,7 @@ QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `
 ### 8.1 smtp-mailer（SMTP 发信）
 - 纯 PHP `fsockopen`/`stream_socket_client` 实现 SMTP 客户端类（EHLO/HELO、AUTH LOGIN、SSL 与 STARTTLS、UTF-8 主题 MIME 编码），零外部依赖。
 - 设置页（`admin_menu` 钩子注册）：SMTP 主机、端口（25/465/587）、加密方式（none/ssl/tls）、账号、授权码、发件人名称；提供"发送测试邮件"按钮。
-- 挂 `send_verify_code`：生成验证码写入 `verify_codes`（channel=email）并发送邮件，返回 true 接管。
+- 挂 `send_verify_code`：内核生成验证码，插件成功发送邮件后经 `VerificationService::recordSent()` 登记 `verify_codes`（channel=email），返回 true 接管。
 - 写统一日志：`plugin_log('smtp.send', 'to=脱敏邮箱 scene=xxx result=ok/fail')`，**日志禁止出现明文验证码与授权码**。
 
 ### 8.2 aliyun-sms（阿里云短信认证）
@@ -389,7 +414,7 @@ QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `
   - 不实现 `CheckSmsVerifyCode`，不挂 `verify_code_check`。
 - 设置页：AccessKeyId、AccessKeySecret、SignName、TemplateCode、SchemeName（选填，默认空）、ValidTime、Interval、验证码错误容忍次数（声明者配置，内核钳制 1-5）。
 - 错误码映射为友好提示：`MOBILE_NUMBER_ILLEGAL`、`BUSINESS_LIMIT_CONTROL`、`FREQUENCY_FAIL`、`INVALID_PARAMETERS`、`FUNCTION_NOT_OPENED`。
-- 挂 `send_verify_code`；发送成功后写入可核验行（used=0），错误容忍/有效期/原子消费与其它渠道完全一致；发送写统一日志（手机号脱敏、不含明文验证码、不记录 AccessKeySecret），核验经内核统一 `verify.check` 审计。
+- 挂 `send_verify_code`；发送成功后经 `VerificationService::recordSent()` 写入可核验行（used=0），错误容忍/有效期/原子消费与其它渠道完全一致；发送写统一日志（手机号脱敏、不含明文验证码、不记录 AccessKeySecret），核验经内核统一 `verify.check` 审计。
 - `plugins/aliyun-sms/README.md`：阿里云控制台开通号码认证服务、创建签名/模板、RAM 授权（`dypns:SendSmsVerifyCode`）的指引。
 
 ---
@@ -406,6 +431,7 @@ QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `
 - `assets/vendor/vditor/` 本地化 dist 裁剪版（保留运行必需的 lute/katex/highlight.js/icons/i18n 与字体/图标资源；已移除 dev/类型文件、mathjax 与未使用的图表语法懒加载库，清单见 assets/vendor/README.md）。
 - 后台文章编辑页集成 Vditor（Markdown 模式），数据库存 Markdown 原文。
 - 前台渲染：`core/Markdown.php` 将 Markdown 转 HTML（自研轻量解析或纯 PHP 单文件解析库），随后用**基于 DOMDocument 的标签/属性白名单**做服务端 XSS 过滤；KaTeX 与 highlight.js 本地化渲染公式与代码块（`$...$`、`$$...$$`、围栏代码块）。
+- 正文另支持 Obsidian Callout 语法 `> [!type] 标题`：内核在块级解析中识别、剥离引用前缀后递归解析正文（支持内部列表/表格/代码块/公式与嵌套 Callout），输出 `div.callout > div.callout-title + div.callout-content`；类型经白名单映射（13 种类型 + Obsidian 别名，未注册降级 `note`），可经 `markdown_callout_types` 过滤器扩展。解析先识别块结构并逐层剥离引用前缀，同层代码围栏优先于公式，避免代码内美元符号被误解析；公式还原后再做最终白名单过滤；嵌套深度上限 64，超出部分转义显示。
 
 ---
 
@@ -415,6 +441,7 @@ QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `
 
 - **布局**：顶部站点名 + 一句话座右铭；作者卡片（头像、昵称、签名简介）；侧边栏含搜索框（"搜索："）、导航菜单、分类列表（带文章数）；主栏为倒序文章列表，每项含标题、作者、日期、分类、摘要、"继续阅读"链接；页脚版权行（`© {起始年}-{当前年} {站点名} All rights Reserved.`）。
 - **交互**：☾ 明暗主题切换（localStorage 记忆，跟随系统偏好为默认）；☰ 移动端折叠菜单；全站响应式。
+- **评论分页**：每页 50 条，按 created_at/id 升序；游客仅 published，登录用户另可见本人 pending。跨页回复在当前页独立展示，父评论同页时仍按一层回复组织；发表/修改后定位所在页。URL 参数经 Router::url 生成，search 的 page 与 post 的 comment_page/edit_comment 在重写及回退模式均保留。
 - **页面类型**：`index.php`（首页/列表）、`single.php`（文章详情 + 评论区 + 评论表单[登录可见]）、`page.php`（独立页面如"关于我"）、`archive.php`（分类/作者归档）、`search.php`、`404.php`。
 - **模板结构（仿 WP）**：`header.php`、`footer.php`、`sidebar.php`、`functions.php`（主题自己的钩子/助手）、`style.css`。
 - **主题多语言（i18n）**：语言包随主题放 `themes/{dir}/langs/xx_XX.php`（`return array(...)`，键规范 `theme.{模块}.{语义}`，`_name`/`_locale` 为包元信息），`langs/zh_CN.php` 为随主题发布的中文基线（最终降级方案，禁止删除）；模板与前台控制器文案经 `theme_t()` 查询（当前语言包 → 主题中文基线 → 中文缺省参数 → 原样返回键，支持 `%s` 占位）；语言解析链：访客 `cb_theme_lang` cookie（侧边栏语言切换器经 `/lang/{code}` 路由写入，HttpOnly+SameSite=Lax，HTTPS 下 Secure）→ 浏览器 `Accept-Language`（q 值降序，先精确后按主标签族匹配，仅白名单主题实有包）→ 后台 `admin_locale`（主题存在同名包时沿用）→ `zh_CN`；`<html lang>` 经 `Theme::locale()` 输出，日期格式经 `theme_date()` 随包内 `theme.common.date_format` 切换；主题 JS 文案在无 CSP 页面经 `window.CB_*` 内联注入（复用内核 verify.js/password_check.js 的覆盖机制），文章/独立页受受限 CSP 约束改走元素 `data-*` 属性传递。无 `langs/` 目录的主题行为与硬编码中文时期完全一致（内核侧 `theme_t` 调用必带中文缺省参数）。默认主题随包中英双语（`langs/zh_CN.php` + `langs/en_US.php`）。
@@ -449,7 +476,7 @@ QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `
 2. **统一输入校验层**：`core/Utils.php` 提供 `input_int()/input_email()/input_phone()/input_slug()/input_enum(白名单)/input_text(长度上限)` 校验器，**所有 GET/POST 入口参数必须先经校验器处理**，禁止直接使用 `$_GET`/`$_POST` 原值。
 3. **XSS**：所有输出经 `e()` 转义；Markdown 渲染结果经服务端白名单（DOMDocument）过滤；评论区纯文本化；前端插入 HTML 一律 `textContent` 或等价安全 API。
 4. **CSRF**：所有改变状态的表单/AJAX 携带并校验 token（与 Session 及 config.php 密钥绑定）。
-5. **SSRF/任意文件**：上传走 MIME 白名单（fileinfo 实测）+ 随机重命名 + 禁止脚本扩展名；`uploads/` 禁止 PHP 执行；不接受用户传入的远程 URL 抓取（插件如需必须显式校验协议与内网地址）。
+5. **SSRF/任意文件**：上传走 MIME 白名单（fileinfo 实测）+ `md5_file` 内容哈希命名与秒传去重 + 禁止脚本扩展名；`uploads/` 禁止 PHP 执行；不接受用户传入的远程 URL 抓取（插件如需必须显式校验协议与内网地址）。
 6. **错误信息**（等保二级·剩余信息/抗抵赖辅助）：`debug=0`（默认）时禁止向页面输出路径、SQL、堆栈；统一 404/500 错误页；错误详情仅写服务器错误日志。
 7. **客户端 IP 可信度**：全站 IP 统一经 `client_ip()` 获取（§6.4）；默认只信 `REMOTE_ADDR`；仅当管理员显式启用并指定标头后才从标头取值，且必须经 `FILTER_VALIDATE_IP` 校验、XFF 链取第一个 IP、失败回退 `REMOTE_ADDR`；禁止无条件信任 `X-Forwarded-For` 等可伪造标头。
 
@@ -463,6 +490,7 @@ QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `
 ### 12.3 权限与文件防护
 12. 后台每个动作执行前 `Auth::check_cap()` 鉴权，禁止仅靠菜单隐藏做权限控制；权限唯一判定依据 `users.role`。
 13. `config.php`、`core/` 禁止 HTTP 直接访问（rewrite + `defined('APP_BOOT') or exit;` 双重防护）。
+14. 三套重写示例同时拒绝配置副本、常见 SQL/日志/编辑器备份后缀、大小写变体及上传目录脚本扩展名；备份仍须放网站根目录外，不以文件后缀规则代替隔离。
 
 ### 12.4 等保二级控制点映射表
 | 等保二级控制点 | 本项目落实点 |
@@ -503,6 +531,24 @@ QQ 登录沿用 `plugin_data` 用户级绑定结构；回调限流复用内核 `
 | 11 | 安全加固一轮（外部审计整改）：闪存 toast 转义 + `json_out_script()` 统一 `<script>` 内 JSON 输出；主题 zip 条目白名单（拒隐藏文件/phar/phtml/路径穿越，不拒 `.php` 模板）；口令/密钥统一经 `input_password()`；移除全部 `@` 抑制 | 恶意主题名不再触发存储型 XSS；危险条目 zip 被拒；全库无 `@`；口令字段无 `$_POST` 直读 |
 | 12 | 运行时升级 PHP 7.4+：安装自检/文档同步；会话 Cookie 改数组参数并全面启用 `SameSite=Lax`（含安装向导）；install 复用 `is_https()` | 7.4 环境下 Cookie 头含 `SameSite=Lax`；`HTTPS=off` 环境会话 Cookie 不误加 `Secure` |
 | 13 | 安全复审：后台写入强制 POST、并发登录/限流/验证码裁决、密码过期通道统一、会话身份清理、QQ 绑定锁失败拒绝、隐藏路径防护与审计补齐 | PHP 7.4 全量语法检查通过；旧码不再生效、并发错误计数不丢失、取锁失败不写入、开启后的管理员与第三方登录受过期拦截；三套重写配置阻断隐藏路径且正常静态资源可用 |
+
+---
+
+### 13.1 本轮优化验收（延续既有里程碑）
+
+| # | 里程碑 | 验收标准 |
+|---|---|---|
+| 14 | Callout 分层解析、代码/公式隔离；钩子执行上下文异常恢复 | 多行公式留在块内、代码美元符号原样保留；action/filter 异常后恢复外层归属 |
+| 15 | 提取验证码、用户写入、限流、文章查询、主题语言与数据服务 | 后台不再依赖 Front；旧限流有效窗口不重置；手机号锁内查重；原有插件/主题 API 保留 |
+| 16 | 文章事务、评论分页、聚合查询、原子写入、显式结构升级与回归入库 | 文章/导航与删除操作可回滚；评论 50 条分页且待审核仅本人可见；Schema 升级幂等且重复号码不自动改写；PHP 7.4 语法及 CLI 回归通过 |
+| 17 | 外部入口加固：敏感操作失败锁定、QQ 绑定身份、账号额度、严格会话、图片尺寸与备份访问防护 | 口令重验不能分离登录失败计数；改密历史失败回滚；QQ 切换身份及重放拒绝；轮换 IP 不重置账号额度；固定会话 ID 被拒绝；正常图片哈希不变、超大尺寸拒绝；三套拒绝规则静态矩阵通过 |
+
+结构升级：新装使用 `Schema::definitions()`（install/schema.php 兼容包装）；存量站备份后执行 `php core/maintenance.php upgrade`，增加 users.phone_identity 生成列及唯一索引、logs.created_at 索引，版本记 schema_version=2。
+重复号码必须由管理员核实处理，命令会在变更前拒绝；联系方式写入在旧结构上也经共享命名锁保护。安装目录可删除，密码历史建表仍可独立执行。
+所有业务仍经现有入口，core/maintenance.php 及 core/tests/ 仅供 CLI，core/ 仍禁止 HTTP 访问；本轮更新三套拒绝规则，存量站须同步并校验、重载对应服务器配置。
+评论增改删共享每账号 10 次/分钟、200 次/24 小时，IP 30 次/分钟；上传共享账号 10 次/分钟、IP 30 次/分钟，头像 10 次/24 小时、配图 100 次/24 小时。窗口从首次请求计时，失败请求也计数，限流 HTTP 429；评论/上传拒绝每账号每分钟审计一次以防日志写放大。搜索 IP 30 次/分钟，找回提交 IP 10 次/分钟。
+安装和运行时共用严格 Cookie 会话（strict_mode、only_cookies、禁用 trans_sid、nocache）；图片核对真实上传来源/大小/MIME/尺寸（单边 10000、总像素 2500 万）并保留内容哈希去重。自助改密在账号锁中执行，新口令/历史事务与旧哈希条件写入，刷新会话 ID/CSRF/指纹并撤销待完成 QQ state。
+测试入口 `php core/tests/run.php`，当前包含 98 项内存/SQL 构造、真实 PHP 会话及重写表达式回归；97 个 PHP 文件以 7.4 检查。真实 MySQL 5.7 DDL/并发、外部渠道联调和实际 Web 服务器配置测试另行执行，不以替身或静态表达式测试代替。
 
 ---
 

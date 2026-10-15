@@ -93,10 +93,7 @@ function qq_login_secret()
  */
 function qq_login_front_url($path)
 {
-    if (Router::rewriteEnabled()) {
-        return Router::base() . '/' . $path;
-    }
-    return Router::base() . '/index.php?r=' . rawurlencode($path);
+    return Router::url('custom', array('path' => $path));
 }
 
 /** QQ 开放平台登记的回调地址（绝对 URL：配置的域名 + 站内路径） */
@@ -118,6 +115,15 @@ function qq_login_auth_url($action)
 {
     $nonce = bin2hex(random_bytes(16));
     $_SESSION['qq_login_state'] = array('nonce' => $nonce, 'action' => $action, 'at' => time());
+    if ($action === 'bind') {
+        $user = Auth::user();
+        if (!$user) {
+            throw new LogicException('Binding requires authentication');
+        }
+        // 授权回调必须仍属于发起绑定时的账号与口令版本。
+        $_SESSION['qq_login_state']['uid'] = (int) $user['id'];
+        $_SESSION['qq_login_state']['pwd_fp'] = Auth::passwordFingerprint($user['password']);
+    }
     $sig = hash_hmac('sha256', $nonce . '|' . $action, qq_login_secret());
     $params = array(
         'response_type' => 'code',
@@ -160,13 +166,20 @@ function qq_login_verify_state($rawState)
         return false;
     }
     $local = $_SESSION['qq_login_state'];
-    unset($_SESSION['qq_login_state']);
     if (!hash_equals((string) $local['nonce'], $nonce)
         || $local['action'] !== $action
-        || time() - (int) $local['at'] > QQ_LOGIN_STATE_TTL
+        || (int) $local['at'] > time() || time() - (int) $local['at'] > QQ_LOGIN_STATE_TTL
     ) {
         return false;
     }
+    if ($action === 'bind') {
+        $user = Auth::user();
+        if (!$user || empty($local['uid']) || (int) $local['uid'] !== (int) $user['id']
+            || !isset($local['pwd_fp']) || !hash_equals($local['pwd_fp'], Auth::passwordFingerprint($user['password']))) {
+            return false;
+        }
+    }
+    unset($_SESSION['qq_login_state']);
     return $action;
 }
 
@@ -292,6 +305,9 @@ function qq_login_claim_route($route, $path)
     }
     if ($path === 'qqlogin/unbind') {
         return array('route' => 'qq_unbind', 'params' => array());
+    }
+    if ($path === 'qqlogin/bind') {
+        return array('route' => 'qq_bind', 'params' => array());
     }
     return $route;
 }
@@ -432,8 +448,20 @@ function qq_login_do_login($openid)
 /* ================= 解绑动作（前台 POST + CSRF） ================= */
 
 add_action('front_route_qq_unbind', 'qq_login_handle_unbind');
+add_action('front_route_qq_bind', 'qq_login_handle_bind');
 
-function qq_login_handle_unbind()
+/** 绑定身份属于敏感变更，必须经站内 POST、CSRF 与当前口令确认后发起。 */
+function qq_login_handle_bind()
+{
+    qq_login_confirm_binding('qq.bind');
+    if (!qq_login_configured()) {
+        redirect(site_base_admin('profile'));
+    }
+    redirect(qq_login_auth_url('bind'));
+}
+
+/** 绑定与解绑共用身份重验，失败不得签发 state 或写入绑定数据。 */
+function qq_login_confirm_binding($source)
 {
     $profileUrl = site_base_admin('profile');
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -445,9 +473,21 @@ function qq_login_handle_unbind()
     }
     Auth::require_cap('edit_profile');
     if (!empty($_SESSION['pwd_expired'])) {
-        blog_log('auth', 'password.expired', 'fail', array('source' => 'qq.unbind'));
+        blog_log('auth', 'password.expired', 'fail', array('source' => $source));
         redirect(site_base_admin('profile/password'));
     }
+    if (!Auth::confirmCurrentPassword(input_password('current_password'))) {
+        plugin_log($source, array('result' => 'fail', 'reason' => 'password_confirmation_failed'));
+        flash_set('error', '请核对当前密码；连续失败将锁定密码验证，请稍后重试。');
+        redirect($profileUrl);
+    }
+}
+
+/** 解绑只在当前账号完成敏感操作重验后执行。 */
+function qq_login_handle_unbind()
+{
+    qq_login_confirm_binding('qq.unbind');
+    $profileUrl = site_base_admin('profile');
     $uid = Auth::id();
     plugin_user_delete('qq-login', $uid, 'qq_openid');
     plugin_user_delete('qq-login', $uid, 'qq_nickname');
@@ -493,23 +533,32 @@ function qq_login_render_profile_card()
     echo '    <h3>QQ 账号绑定</h3>' . "\n";
     if ($openid !== '') {
         $nickname = (string) plugin_user_get('qq-login', $uid, 'qq_nickname', '');
-        echo '    <div class="form-row"><label>绑定状态</label><div>已绑定';
+        echo '    <div class="layui-form-item"><label class="v-label">绑定状态</label><div>已绑定';
         if ($nickname !== '') {
             echo '（' . e($nickname) . '）';
         }
         echo '</div></div>' . "\n";
-        echo '    <form method="post" action="' . e(qq_login_front_url('qqlogin/unbind')) . '" '
-            . 'style="display:inline" onsubmit="return confirm(\'确认解除 QQ 绑定？解绑后将无法使用 QQ 登录本站。\');">';
-        echo Csrf::field();
-        echo '<button class="btn gray" type="submit">解除绑定</button></form> ';
-        echo '<a class="btn" href="' . e(qq_login_auth_url('bind')) . '">换绑 QQ</a>' . "\n";
+        qq_login_render_binding_form('qqlogin/unbind', '解除绑定');
+        qq_login_render_binding_form('qqlogin/bind', '换绑 QQ');
         echo '    <p class="tip">绑定后可在登录页点击 QQ 图标直接登录；一个 QQ 只能绑定一个账号，换绑将自动替换原绑定。</p>' . "\n";
     } else {
-        echo '    <div class="form-row"><label>绑定状态</label><div>未绑定</div></div>' . "\n";
-        echo '    <a class="btn" href="' . e(qq_login_auth_url('bind')) . '">绑定 QQ</a>' . "\n";
+        echo '    <div class="layui-form-item"><label class="v-label">绑定状态</label><div>未绑定</div></div>' . "\n";
+        qq_login_render_binding_form('qqlogin/bind', '绑定 QQ');
         echo '    <p class="tip">绑定后可在登录页点击 QQ 图标直接登录，无需输入账号密码。</p>' . "\n";
     }
     echo '</div>' . "\n";
+}
+
+/** 密码不写入 URL、data 属性或会话，只随受 CSRF 保护的 POST 提交。 */
+function qq_login_render_binding_form($path, $label)
+{
+    $passwordId = 'qq-login-password-' . basename($path);
+    echo '<form method="post" action="' . e(qq_login_front_url($path)) . '" class="layui-form v-form">';
+    echo Csrf::field();
+    echo '<div class="layui-form-item"><label class="v-label" for="' . e($passwordId) . '">'
+        . e(admin_t('admin.profile.current_pwd')) . '</label>';
+    echo '<input type="password" id="' . e($passwordId) . '" name="current_password" autocomplete="current-password" required class="layui-input"></div>';
+    echo '<button class="layui-btn" type="submit">' . e($label) . '</button></form>';
 }
 
 /* ================= 后台设置页 ================= */

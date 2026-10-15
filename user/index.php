@@ -16,7 +16,5 @@ require APP_ROOT . '/core/AdminPlugin.php';
 require APP_ROOT . '/core/AdminLog.php';
 require APP_ROOT . '/core/AdminProfile.php';
 require APP_ROOT . '/core/AdminUpload.php';
-// 个人资料改绑邮箱/手机复用前台的验证码核验逻辑，需加载 Front 类
-require APP_ROOT . '/core/Front.php';
 
 Admin::handle();
