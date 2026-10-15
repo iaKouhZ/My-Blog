@@ -124,7 +124,8 @@ function my_handle_callback($params)
 
 URL 统一使用 `Router::url('custom', array('path' => 'my-callback'))`，自动兼容伪静态开关。
 自定义路径只接受字母数字开头及字母、数字、斜杠、下划线、连字符，最长 200 字符，非法路径抛出异常。
-QQ 插件认领 `qqlogin-callback`（OAuth 回调）、`qqlogin/bind`（POST 发起绑定/换绑）、`qqlogin/unbind`（POST 解绑）；后两者必须校验 CSRF、edit_profile、密码过期状态并重验当前密码。
+QQ 插件认领 `qqlogin/start`（GET 点击后发起登录）、`qqlogin-callback`（OAuth 回调）、`qqlogin/bind`（POST 发起绑定/换绑）、`qqlogin/unbind`（POST 解绑）；后两者必须校验 CSRF、edit_profile、密码过期状态并重验当前密码。
+登录图标使用配置域名下的发起链接，页面渲染不生成 state；发起响应禁止缓存并按 IP 每分钟限 10 次，外跳前显式保存 Session。首次签名密钥在锁内重读并创建，避免并发替换；回调失败仅审计 `state_reason` 分类，不输出敏感原文。
 
 ## 4. 插件 API
 

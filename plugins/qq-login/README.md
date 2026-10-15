@@ -21,9 +21,12 @@
   攻击期间保有可信的自助进入途径。封禁 / 禁用 / 注销等账号状态在两条通道同等生效，
   不存在绕过空间；
 - **state 双重防伪**：HMAC-SHA256 签名 + 会话随机数一次性校验（10 分钟有效），防 CSRF 与重放；
+- **点击时发起授权**：登录图标指向配置域名下的 `qqlogin/start`，仅在点击进入后签发 state，外跳 QQ 前立即保存会话；刷新、旧页面或另一标签页渲染不会覆盖在途授权。发起与回调使用同一域名，避免从域名别名进入时回调丢失会话 Cookie；
+- **首次签名密钥初始化**：按插件命名锁串行创建，等锁后重读存储，避免并发初始化覆盖已签发 state 所用的密钥；
 - **绑定身份确认**：`qqlogin/bind` / `qqlogin/unbind` 仅接受 POST，校验 CSRF、权限和当前密码；密码失败与登录共享持久化锁定。绑定 state 同时记录账号 ID 与口令指纹，回调切换账号或口令版本时拒绝；无关 state 不提前销毁当前授权；
 - **后台表单样式**：个人资料中的绑定、换绑和解绑表单复用现有 Layui 输入框与按钮样式，与资料编辑、修改密码页面保持一致；
 - **回调限流**：复用内核 `ip_throttle_allow('qq_callback', 10)`，同一 IP 每分钟最多 10 次回调，IPv6 按 /64 归一；取锁失败即拒绝，计数在锁内读取最新值；
+- **发起限流与缓存**：`qqlogin/start` 只接受 GET，同一 IP 每分钟最多 10 次，响应禁止缓存；CDN 应对授权发起及回调路径绕过缓存，更新时清除旧登录页缓存；
 - **绑定存储**：`plugin_data` 表用户级作用域（`qq_openid` / `qq_nickname`），一个 QQ 只能绑定一个账号；按 OpenID 加锁，未取得锁时拒绝写入；
 - **密码过期**：内核策略默认关闭；开启后 QQ 登录同样建立过期标记，既有会话到期后也受后台拦截，绑定/解绑需先完成强制改密；
 - **TLS 强校验**：所有对 graph.qq.com 的请求强制验证证书；
@@ -31,7 +34,7 @@
 
 ## 依赖的内核能力
 
-- 自定义路由：`route_parse` 过滤器 + `front_route_{name}` 动作（回调 / 发起绑定 / 解绑端点）；站内 URL 统一使用 `Router::url('custom', ...)`
+- 自定义路由：`route_parse` 过滤器 + `front_route_{name}` 动作（发起登录 / 回调 / 发起绑定 / 解绑端点）；站内 URL 统一使用 `Router::url('custom', ...)`，登录发起链接再加配置域名保证与回调同源
 - 主题钩子：`auth_form_footer`（登录页入口）、后台视图钩子 `profile_cards`（绑定卡片）
 - 数据 API：`plugin_option` / `plugin_data_*` / `plugin_user_*`
 - 认证与限流：`Auth::loginUser()` / `Auth::require_cap()` / `Auth::confirmCurrentPassword()` / `Auth::passwordFingerprint()` / `ip_throttle_allow()`
@@ -40,3 +43,9 @@
 旧 `plugin_data.rl_*` 临时行由已有过期清理逻辑回收。
 
 插件卸载时内核自动清理全部配置与绑定数据，无残留。
+
+## 首次登录提示重新发起的排查
+
+旧版本在渲染登录页时就生成授权 state，页面刷新、多标签页渲染或旧页面中的链接可能与服务端状态不一致；从域名别名进入、回调到配置域名时，也可能缺少原会话 Cookie。新版改为经配置域名下的发起入口即时签发，QQ 开放平台登记的回调地址不变，无需新增数据库结构或重写规则。
+
+校验失败的审计事件仍为 `qq-login.callback` / `state_invalid`，增加 `state_reason` 分类：`session_missing`（没有在途授权）、`nonce_mismatch`（授权被替换）、`signature_invalid`、`expired`、`identity_changed` 等；仅记录分类，不记录 state、授权码、Cookie、令牌或密钥原文。若仍出现 `session_missing`，检查 CDN 缓存及多节点是否共享 Session 存储。

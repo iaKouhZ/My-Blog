@@ -187,10 +187,71 @@ TestSuite::run('QQ state rejects expiration and tampered signatures', function (
     $_SESSION['qq_login_state']['at'] = time() - 601;
     TestSuite::check(qq_login_verify_state($state) === false);
 });
+TestSuite::run('QQ login entry uses callback origin without creating or overwriting state', function () {
+    hardening_user();
+    Option::set('plugin_qq-login_appid', 'test-app');
+    Option::set('plugin_qq-login_appkey', 'test-only-app-key');
+    Option::set('plugin_qq-login_domain', 'https://login.example.invalid');
+    Option::set('rewrite_enabled', '1');
+    unset($_SESSION['qq_login_state']);
+    ob_start();
+    try {
+        qq_login_render_entry('login');
+        $html = ob_get_contents();
+    } finally {
+        ob_end_clean();
+    }
+    TestSuite::check(!isset($_SESSION['qq_login_state']));
+    TestSuite::check(strpos($html, 'href="https://login.example.invalid' . Router::base() . '/qqlogin/start"') !== false);
+    $state = hardening_qq_state('login');
+    ob_start();
+    try {
+        qq_login_render_entry('login');
+        qq_login_render_entry('login');
+    } finally {
+        ob_end_clean();
+    }
+    TestSuite::check(qq_login_verify_state($state) === 'login');
+});
+TestSuite::run('QQ state diagnostics distinguish missing session from stale page nonce', function () {
+    hardening_user();
+    $older = hardening_qq_state('login');
+    $current = hardening_qq_state('login');
+    $reason = null;
+    TestSuite::check(qq_login_verify_state($older, $reason) === false && $reason === 'nonce_mismatch');
+    unset($_SESSION['qq_login_state']);
+    TestSuite::check(qq_login_verify_state($current, $reason) === false && $reason === 'session_missing');
+    TestSuite::check(qq_login_verify_state(array(), $reason) === false && $reason === 'malformed');
+});
+TestSuite::run('QQ signing initialization rechecks storage after waiting for the lock', function () {
+    reset_service_test();
+    Option::all();
+    DB::$onLock = function () {
+        DB::insert('options', array('option_key' => 'plugin_qq-login_secret', 'option_value' => 'another-request-test-secret'));
+    };
+    TestSuite::check(qq_login_secret() === 'another-request-test-secret');
+    TestSuite::check(qq_login_secret() === 'another-request-test-secret');
+    TestSuite::check(count(DB::$rows['options']) === 1 && empty(DB::$locks));
+});
+TestSuite::run('QQ signing initialization refuses lock failure instead of issuing an unstable key', function () {
+    reset_service_test();
+    DB::$allowLock = false;
+    $refused = false;
+    try {
+        qq_login_secret();
+    } catch (RuntimeException $ex) {
+        $refused = true;
+    }
+    TestSuite::check($refused && empty(DB::$rows['options']));
+});
 TestSuite::run('QQ bind route URLs obey rewrite mode and reject path traversal', function () {
     reset_service_test();
     Option::set('rewrite_enabled', '0');
     TestSuite::check(strpos(qq_login_front_url('qqlogin/bind'), 'index.php?r=qqlogin%2Fbind') !== false);
+    Option::set('plugin_qq-login_domain', 'https://login.example.invalid');
+    TestSuite::check(strpos(qq_login_start_url(), 'https://login.example.invalid') === 0);
+    TestSuite::check(strpos(qq_login_start_url(), 'index.php?r=qqlogin%2Fstart') !== false);
+    TestSuite::check(qq_login_claim_route(null, 'qqlogin/start')['route'] === 'qq_start');
     try {
         Router::url('custom', array('path' => '../config.php'));
         TestSuite::check(false);
