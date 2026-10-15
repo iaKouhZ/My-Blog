@@ -2,6 +2,10 @@
 .qoder/
 my-blog.zip
 
+# 本地测试与验证脚本不随发布源码交付
+/core/tests/
+/tests/
+
 # 安装程序生成的敏感文件（含数据库凭据与站点密钥），禁止入库
 config.php
 install/install.lock
