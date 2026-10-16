@@ -165,6 +165,27 @@ Description: 主题描述（后台列表展示，截断 40 字）
 `<p>` 里，**不会出现 `tex-block` 套 `tex-inline` 的嵌套**）；围栏代码块为
 `<pre><code class="language-xxx">`。
 
+Markdown 表格一律输出在滚动容器内：
+
+```html
+<div class="table-wrap"><table><thead>…</thead><tbody>…</tbody></table></div>
+```
+
+`.table-wrap` 由内核产出，**主题必须给它横向滚动**，否则宽表格会被
+`table { max-width: 100% }` 压进版心并逐字折行：
+
+```css
+article .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+article .table-wrap > table { width: auto; min-width: 100%; max-width: none; }
+article .tex-block { overflow-x: auto; }   /* KaTeX 块级公式内部 nowrap */
+```
+
+`.tex-block` 同样需要滚动——KaTeX 的 `.katex-display > .katex` 是
+`white-space: nowrap` 且自身不带溢出处理，不加外层滚动会直接撑破窄屏版心。
+
+表格单元格内的 `|` 只有在行内代码与 `$...$` 公式之外才是列分隔符，
+所以 `| $\exists M>0,\ |f(x)|\le M$ |` 这样的绝对值竖线可以正常书写。
+
 Obsidian Callout（`> [!note] 标题`）由内核解析为：
 
 ```html

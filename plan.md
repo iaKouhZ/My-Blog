@@ -432,6 +432,7 @@ QQ 登录图标仅链接配置域名下的 `qqlogin/start` → `front_route_qq_s
 - 后台文章编辑页集成 Vditor（Markdown 模式），数据库存 Markdown 原文。
 - 前台渲染：`core/Markdown.php` 将 Markdown 转 HTML（自研轻量解析或纯 PHP 单文件解析库），随后用**基于 DOMDocument 的标签/属性白名单**做服务端 XSS 过滤；KaTeX 与 highlight.js 本地化渲染公式与代码块（`$...$`、`$$...$$`、围栏代码块）。
 - 正文另支持 Obsidian Callout 语法 `> [!type] 标题`：内核在块级解析中识别、剥离引用前缀后递归解析正文（支持内部列表/表格/代码块/公式与嵌套 Callout），输出 `div.callout > div.callout-title + div.callout-content`；类型经白名单映射（13 种类型 + Obsidian 别名，未注册降级 `note`），可经 `markdown_callout_types` 过滤器扩展。解析先识别块结构并逐层剥离引用前缀，同层代码围栏优先于公式，避免代码内美元符号被误解析；公式还原后再做最终白名单过滤；嵌套深度上限 64，超出部分转义显示。
+- Markdown 表格输出 `div.table-wrap > table`（外层滚动容器，供主题在窄屏做横向滚动）。切分单元格前先按行内解析同样的规则把行内代码与 `$...$` 公式换成不含 `|` 的随机前缀占位符，切分后还原：`|x-a|`、`\left|…\right|` 这类竖线属于 TeX 语法，不再被当成列分隔符（否则单元格被拆开、公式只剩半个 `$` 对而无法渲染）。两处规则必须一致，否则会出现"切分视为文本、渲染视为公式"的错位。`\|` 转义竖线仍不受支持（与既有行为一致）。
 
 ---
 
