@@ -127,7 +127,7 @@ class Router
     {
         // 回退模式：index.php?r=post/1.html
         if (isset($_GET['r']) && is_string($_GET['r'])) {
-            return $_GET['r'];
+            return input_text('r', '', 2048, 'get');
         }
         // 重写模式：PATH_INFO 或 REDIRECT_URL
         if (!empty($_SERVER['PATH_INFO'])) {
@@ -158,31 +158,38 @@ class Router
      */
     public static function url($name, array $params = array())
     {
+        if ($name === 'admin') {
+            return site_base_admin(isset($params['m']) ? $params['m'] : '');
+        }
         $path = self::buildPath($name, $params);
         $base = self::base();
+        $query = array();
+        if ($name === 'search') {
+            if (isset($params['q'])) {
+                $query['q'] = $params['q'];
+            }
+            if (isset($params['page']) && (int) $params['page'] > 1) {
+                $query['page'] = (int) $params['page'];
+            }
+        } elseif ($name === 'lang_switch' && isset($params['redirect'])) {
+            $query['redirect'] = $params['redirect'];
+        } elseif ($name === 'post') {
+            foreach (array('comment_page', 'edit_comment') as $key) {
+                if (isset($params[$key]) && (int) $params[$key] > 0) {
+                    $query[$key] = (int) $params[$key];
+                }
+            }
+        }
         if (self::rewriteEnabled()) {
             $url = $base . $path;
-            if ($name === 'search' && isset($params['q'])) {
-                $url .= '?q=' . urlencode($params['q']);
-            }
-            if ($name === 'lang_switch' && isset($params['redirect'])) {
-                $url .= '?redirect=' . urlencode($params['redirect']);
-            }
-            return $url;
+        } else {
+            $r = ltrim($path, '/');
+            $url = $r === '' ? $base . '/' : $base . '/index.php?r=' . rawurlencode($r);
         }
-        // 回退模式：index.php?r=...
-        $r = ltrim($path, '/');
-        if ($r === '') {
-            return $base . '/';
+        if (!empty($query)) {
+            $url .= (strpos($url, '?') === false ? '?' : '&') . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
         }
-        $extra = '';
-        if ($name === 'search' && isset($params['q'])) {
-            $extra = '&q=' . urlencode($params['q']);
-        }
-        if ($name === 'lang_switch' && isset($params['redirect'])) {
-            $extra .= '&redirect=' . urlencode($params['redirect']);
-        }
-        return $base . '/index.php?r=' . rawurlencode($r) . $extra;
+        return $url;
     }
 
     /**
@@ -191,6 +198,12 @@ class Router
     private static function buildPath($name, array $params)
     {
         switch ($name) {
+            case 'custom':
+                $path = isset($params['path']) ? $params['path'] : '';
+                if (!is_string($path) || !preg_match('#^[A-Za-z0-9][A-Za-z0-9/_-]{0,199}$#D', $path)) {
+                    throw new InvalidArgumentException('Invalid custom route path');
+                }
+                return '/' . $path;
             case 'home':
                 $page = isset($params['page']) ? (int) $params['page'] : 1;
                 return $page > 1 ? '/page/' . $page : '/';

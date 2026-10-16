@@ -218,11 +218,11 @@ function input_longtext($key, $default = '', $maxLen = 200000)
 function input_email($key, $default = '', $source = 'request')
 {
     $src = input_source($source);
-    $value = isset($src[$key]) ? trim((string) $src[$key]) : '';
+    $value = isset($src[$key]) && is_string($src[$key]) ? trim($src[$key]) : '';
     if ($value === '') {
         return $default;
     }
-    return filter_var($value, FILTER_VALIDATE_EMAIL) ? mb_substr($value, 0, 128) : '';
+    return strlen($value) <= 128 && filter_var($value, FILTER_VALIDATE_EMAIL) ? $value : '';
 }
 
 /**
@@ -236,7 +236,7 @@ function input_email($key, $default = '', $source = 'request')
 function input_phone($key, $default = '', $source = 'request')
 {
     $src = input_source($source);
-    $value = isset($src[$key]) ? trim((string) $src[$key]) : '';
+    $value = isset($src[$key]) && is_string($src[$key]) ? trim($src[$key]) : '';
     return preg_match('/^1[3-9]\d{9}$/', $value) ? $value : $default;
 }
 
@@ -251,7 +251,7 @@ function input_phone($key, $default = '', $source = 'request')
 function input_slug($key, $default = '', $source = 'request')
 {
     $src = input_source($source);
-    $value = isset($src[$key]) ? trim((string) $src[$key]) : '';
+    $value = isset($src[$key]) && is_string($src[$key]) ? trim($src[$key]) : '';
     if (!preg_match('/^[a-z0-9][a-z0-9-]{0,99}$/', $value)) {
         return $default;
     }
@@ -270,13 +270,13 @@ function input_slug($key, $default = '', $source = 'request')
 function input_enum($key, array $allowed, $default = '', $source = 'request')
 {
     $src = input_source($source);
-    $value = isset($src[$key]) ? (string) $src[$key] : '';
+    $value = isset($src[$key]) && is_string($src[$key]) ? $src[$key] : '';
     return in_array($value, $allowed, true) ? $value : $default;
 }
 
 /**
  * 统一输入校验器：口令/密钥原文（密码、AccessKeySecret、SMTP 授权码等）
- * 只做字符串化与长度上限，不 trim、不过滤——口令原文须逐字节保留，
+ * 超长输入整体拒绝，不 trim、不截断——避免把不同输入当成同一口令，
  * 强度判定由 Auth::validate_password_strength() 另行负责
  *
  * @param string $key     参数名
@@ -291,7 +291,27 @@ function input_password($key, $default = '', $maxLen = 128, $source = 'post')
     if (!isset($src[$key]) || !is_string($src[$key]) || $src[$key] === '') {
         return $default;
     }
-    return substr($src[$key], 0, $maxLen);
+    return strlen($src[$key]) <= $maxLen && strpos($src[$key], "\0") === false ? $src[$key] : $default;
+}
+
+/** 统一会话配置，拒绝未经服务器建立的会话 ID 与 URL 会话传递。 */
+function start_secure_session($name)
+{
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.use_only_cookies', '1');
+    ini_set('session.use_trans_sid', '0');
+    session_set_cookie_params(array(
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => is_https(),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ));
+    session_cache_limiter('nocache');
+    session_name($name);
+    if (!session_start()) {
+        throw new RuntimeException('Session initialization failed');
+    }
 }
 
 /**
@@ -501,7 +521,7 @@ function throttle_ip_key($ip)
 }
 
 /**
- * IP 维度分钟窗口限流：options 表独立计数器，不依赖审计表聚合。
+ * IP 维度分钟窗口限流：兼容助手，临时记录与裁决由 RateLimiter 负责。
  * 计数器键含客户端 IP 散列，被限流的请求由调用方自行决定是否写审计，
  * 避免攻击者以高频请求向只增不改的审计表持续灌数据。
  * 读-改-写经 MySQL 命名锁互斥，并发请求不会因竞态少计而超放
@@ -512,29 +532,7 @@ function throttle_ip_key($ip)
  */
 function ip_throttle_allow($bucket, $maxPerMinute)
 {
-    $key = 'throttle_' . $bucket . '_' . md5(throttle_ip_key(client_ip()));
-    $now = time();
-    // 3 秒等待：临界区仅一次 options 读写（毫秒级），零超时会把双击提交等
-    // 轻微并发误判为限流；等待超时仍取不到才按超限处理（fail-closed）
-    if (!DB::lock('throttle', 3)) {
-        return false;
-    }
-    try {
-        // Option 缓存可能在等锁之前已载入；必须在锁内读取最新计数，避免并发请求覆盖。
-        $stored = DB::query('options')->where('option_key', '=', $key)->value('option_value');
-        $parts = explode('|', (string) $stored);
-        $start = isset($parts[0]) && $parts[0] !== '' ? (int) $parts[0] : 0;
-        $count = isset($parts[1]) ? (int) $parts[1] : 0;
-        if ($now - $start >= 60) {
-            $start = $now;
-            $count = 0;
-        }
-        $count++;
-        Option::set($key, $start . '|' . $count);
-        return $count <= $maxPerMinute;
-    } finally {
-        DB::unlock('throttle');
-    }
+    return RateLimiter::allow($bucket, $maxPerMinute);
 }
 
 /**
@@ -545,31 +543,7 @@ function ip_throttle_allow($bucket, $maxPerMinute)
  */
 function ip_throttle_purge()
 {
-    $last = (int) Option::get('throttle_last_purge', 0);
-    if (time() - $last < 86400) {
-        return;
-    }
-    Option::set('throttle_last_purge', time());
-    try {
-        // LIKE 中下划线为通配符，需反斜杠转义确保只匹配 throttle_ 前缀
-        $rows = DB::query('options')
-            ->where('option_key', 'LIKE', 'throttle\_%')
-            ->select(array('option_key', 'option_value'));
-        foreach ($rows as $row) {
-            if ($row['option_key'] === 'throttle_last_purge') {
-                continue;
-            }
-            $parts = explode('|', (string) $row['option_value']);
-            // 格式为 start|count（窗口起点|计数）：start 是判龄时间戳，
-            // 活跃窗口（<1h）保留，过期窗口删除
-            $start = isset($parts[0]) ? (int) $parts[0] : 0;
-            if ($start > 0 && $start < time() - 3600) {
-                DB::delete('options', array('option_key' => $row['option_key']));
-            }
-        }
-    } catch (Exception $ex) {
-        error_log('[blog] throttle purge failed: ' . $ex->getMessage());
-    }
+    RateLimiter::purgeLegacy();
 }
 
 /**

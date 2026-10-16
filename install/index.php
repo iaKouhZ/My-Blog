@@ -16,16 +16,8 @@ require APP_ROOT . '/core/Utils.php';
 // 安装程序自身也使用 UTC+8，保证初始时间戳（管理员建号、site_created_year）与站点默认时区一致
 date_default_timezone_set('Asia/Shanghai');
 
-session_name('cb_install_sid');
-// 与内核 bootstrap 同策略：HTTPS 判定复用 is_https()（含 HTTPS='off' 与 443 端口识别）
-session_set_cookie_params(array(
-    'lifetime' => 0,
-    'path'     => '/',
-    'secure'   => is_https(),
-    'httponly' => true,
-    'samesite' => 'Lax',
-));
-session_start();
+// 安装与运行时共用严格的 Cookie 会话策略。
+start_secure_session('cb_install_sid');
 
 // 已安装则跳转首页（双重守卫：install.lock 或 config.php 任一存在即视为已安装；
 // 防止锁文件被误删后经重装覆盖 config.php 导致站点被接管）
@@ -299,6 +291,7 @@ function ins_do_install($dbConf, $admin)
         'ip_header_enabled'       => '0',
         'ip_header_name'          => 'X-Forwarded-For',
         'debug'                   => '0',
+        'schema_version'          => '2',
     );
     $stmt = $pdo->prepare('INSERT INTO `' . $prefix . 'options` (option_key, option_value) VALUES (?, ?)
         ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)');

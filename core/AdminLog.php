@@ -77,8 +77,7 @@ class AdminLog
             Admin::forbidden('export requires POST');
         }
         $password = input_password('current_password');
-        $user = Auth::user();
-        if ($password === '' || !password_verify($password, $user['password'])) {
+        if (!Auth::confirmCurrentPassword($password)) {
             blog_log('security', 'log.export', 'fail', array('reason' => 'password_wrong'));
             flash_set('error', admin_t('admin.log.export_pwd_wrong'));
             redirect(site_base_admin('log/list'));

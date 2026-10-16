@@ -24,7 +24,7 @@ defined('APP_BOOT') or exit;
             <label class="v-label"><?php echo e(admin_t('admin.user.col_email')); ?></label>
             <input type="email" name="email" id="profileEmail" value="<?php echo $user['email'] !== null ? e($user['email']) : ''; ?>" class="layui-input">
         </div>
-        <?php if (Plugin::isActive('smtp-mailer')): ?>
+        <?php if (get_verify_provider('email') !== null): ?>
         <div class="layui-form-item">
             <label class="v-label"><?php echo e(admin_t('admin.profile.email_code')); ?></label>
             <div class="filter-bar">
@@ -37,7 +37,7 @@ defined('APP_BOOT') or exit;
             <label class="v-label"><?php echo e(admin_t('admin.user.col_phone')); ?></label>
             <input type="text" name="phone" id="profilePhone" pattern="1[3-9][0-9]{9}" value="<?php echo e($user['phone']); ?>" class="layui-input">
         </div>
-        <?php if (Plugin::isActive('aliyun-sms')): ?>
+        <?php if (get_verify_provider('sms') !== null): ?>
         <div class="layui-form-item">
             <label class="v-label"><?php echo e(admin_t('admin.profile.sms_code')); ?></label>
             <div class="filter-bar">

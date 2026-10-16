@@ -12,6 +12,8 @@ require APP_ROOT . '/core/Utils.php';
 require APP_ROOT . '/core/DB.php';
 require APP_ROOT . '/core/Hook.php';
 require APP_ROOT . '/core/Option.php';
+require APP_ROOT . '/core/Schema.php';
+require APP_ROOT . '/core/RateLimiter.php';
 require APP_ROOT . '/core/Lang.php';
 require APP_ROOT . '/core/Csrf.php';
 require APP_ROOT . '/core/Router.php';
@@ -19,6 +21,13 @@ require APP_ROOT . '/core/Auth.php';
 require APP_ROOT . '/core/Logger.php';
 require APP_ROOT . '/core/Markdown.php';
 require APP_ROOT . '/core/Plugin.php';
+require APP_ROOT . '/core/VerificationService.php';
+require APP_ROOT . '/core/UserService.php';
+require APP_ROOT . '/core/PostQuery.php';
+require APP_ROOT . '/core/CommentQuery.php';
+require APP_ROOT . '/core/PostService.php';
+require APP_ROOT . '/core/ThemeLocale.php';
+require APP_ROOT . '/core/ThemeData.php';
 require APP_ROOT . '/core/Theme.php';
 
 /**
@@ -116,16 +125,7 @@ if (Option::get('debug', '0') === '1') {
 }
 
 // Session：HttpOnly + SameSite=Lax + HTTPS 下 Secure；空闲超时在 Auth::checkSessionTimeout 处理
-$secure = is_https();
-session_set_cookie_params(array(
-    'lifetime' => 0,
-    'path'     => '/',
-    'secure'   => $secure,
-    'httponly' => true,
-    'samesite' => 'Lax',
-));
-session_name('cb_sid');
-session_start();
+start_secure_session('cb_sid');
 
 Auth::checkSessionTimeout();
 

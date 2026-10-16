@@ -22,12 +22,12 @@ class AdminComment
 
         // 用户与文章映射
         $users = array();
-        $rows = DB::query('users')->select(array('id', 'nickname'));
+        $rows = DB::query('users')->whereIn('id', array_unique(array_column($comments, 'user_id')))->select(array('id', 'nickname'));
         foreach ($rows as $r) {
             $users[(int) $r['id']] = $r['nickname'];
         }
         $posts = array();
-        $rows = DB::query('posts')->select(array('id', 'title'));
+        $rows = DB::query('posts')->whereIn('id', array_unique(array_column($comments, 'post_id')))->select(array('id', 'title'));
         foreach ($rows as $r) {
             $posts[(int) $r['id']] = $r['title'];
         }
@@ -58,13 +58,8 @@ class AdminComment
             if (ctype_digit($author)) {
                 $query->where('user_id', '=', (int) $author);
             } else {
-                $ids = array();
-                $rows = DB::query('users')->select(array('id', 'username', 'nickname'));
-                foreach ($rows as $r) {
-                    if (stripos($r['username'], $author) !== false || stripos($r['nickname'], $author) !== false) {
-                        $ids[] = (int) $r['id'];
-                    }
-                }
+                $rows = DB::query('users')->likeAny(array('username', 'nickname'), $author)->select(array('id'));
+                $ids = array_column($rows, 'id');
                 // 空集合时 whereIn 恒假，直接返回空列表
                 $query->whereIn('user_id', $ids);
             }

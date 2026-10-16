@@ -210,7 +210,7 @@ class Auth
     public static function attempt($account, $password)
     {
         // IP 维度二级限流：同一 IP 每分钟 ≤20 次登录尝试
-        // 独立 options 计数器实现（不依赖审计表聚合）；被限流的请求不逐条写日志，
+        // 独立临时计数器实现（不依赖审计表聚合）；被限流的请求不逐条写日志，
         // 避免攻击者以高频请求向只增不改的审计表持续灌数据
         if (!ip_throttle_allow('login', 20)) {
             return array('ok' => false, 'code' => 'throttled', 'args' => array(), 'msg' => self::msgOf('throttled'));
@@ -227,6 +227,9 @@ class Auth
         if (!$user) {
             blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'not_found'));
             return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
+        }
+        if (!RateLimiter::allowFor('password_check', 'user:' . (int) $user['id'], 20)) {
+            return array('ok' => false, 'code' => 'throttled', 'args' => array(), 'msg' => self::msgOf('throttled'));
         }
 
         // 用户名与邮箱别名共用账号锁；等锁后重读，防并发成功登录清除刚生效的锁定。
@@ -247,28 +250,29 @@ class Auth
     }
 
     /** 账号锁内完成状态校验与口令裁决，锁定细节仅进入审计日志 */
-    private static function attemptUser(array $user, $account, $password)
+    private static function attemptUser(array $user, $account, $password, $confirmation = false)
     {
+        $failureAction = $confirmation ? 'password.confirm' : 'login.fail';
         // 锁定期检查：与密码错误统一提示，防止探测账号是否存在及其状态（原因仅入审计日志）
         if (!empty($user['locked_until']) && strtotime($user['locked_until']) > time()) {
-            blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'locked'));
+            blog_log('auth', $failureAction, 'fail', array('account' => $account, 'reason' => 'locked'));
             return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
         }
 
         if ((int) $user['status'] !== 1) {
-            blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'disabled'));
+            blog_log('auth', $failureAction, 'fail', array('account' => $account, 'reason' => 'disabled'));
             return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
         }
 
         // 封禁：内容保留但禁止登录（不泄露账号状态细节，统一按认证失败提示）
         if (!empty($user['is_banned'])) {
-            blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'banned'));
+            blog_log('auth', $failureAction, 'fail', array('account' => $account, 'reason' => 'banned'));
             return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
         }
 
         // 注销：禁止登录，前台历史内容匿名展示由 Front 层处理
         if (!empty($user['is_deleted'])) {
-            blog_log('auth', 'login.fail', 'fail', array('account' => $account, 'reason' => 'deleted'));
+            blog_log('auth', $failureAction, 'fail', array('account' => $account, 'reason' => 'deleted'));
             return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
         }
 
@@ -293,16 +297,48 @@ class Auth
                     ));
                 blog_log('auth', 'user.locked', 'success', array('user_id' => (int) $user['id']));
             }
-            blog_log('auth', 'login.fail', 'fail', array('user_id' => (int) $user['id'], 'fail_count' => $fail));
+            blog_log('auth', $failureAction, 'fail', array('user_id' => (int) $user['id'], 'fail_count' => $fail));
             return array('ok' => false, 'code' => 'invalid_credentials', 'args' => array(), 'msg' => self::msgOf('invalid_credentials'));
         }
 
         // 登录成功：清零失败计数并解除锁定
         DB::update('users', array('login_fail' => 0, 'locked_until' => null), array('id' => (int) $user['id']));
+        if ($confirmation) {
+            blog_log('auth', 'password.confirm', 'success', array('user_id' => (int) $user['id']));
+            return array('ok' => true);
+        }
         self::loginUser($user);
         blog_log('auth', 'login', 'success', array('user_id' => (int) $user['id']));
 
         return array('ok' => true, 'code' => 'login_success', 'args' => array(), 'msg' => self::msgOf('login_success'));
+    }
+
+    /** 敏感操作重验：与登录共用持久化失败计数、账号互斥锁及锁定期。 */
+    public static function confirmCurrentPassword($password)
+    {
+        $current = self::user();
+        if (!$current || !is_string($password) || !ip_throttle_allow('password_confirm', 20)) {
+            return false;
+        }
+        if (!RateLimiter::allowFor('password_check', 'user:' . (int) $current['id'], 20)) {
+            return false;
+        }
+        $lock = 'login_' . (int) $current['id'];
+        if (!DB::lock($lock, 5)) {
+            return false;
+        }
+        try {
+            $user = DB::query('users')->where('id', '=', (int) $current['id'])->first();
+            // 等锁期间发生改密时，旧会话不得用已失效的身份继续敏感操作。
+            if (!$user || !hash_equals(self::passwordFingerprint($current['password']), self::passwordFingerprint($user['password']))) {
+                blog_log('auth', 'password.confirm', 'fail', array('reason' => 'identity_changed'));
+                return false;
+            }
+            $result = self::attemptUser($user, $user['username'], $password, true);
+            return $result['ok'];
+        } finally {
+            DB::unlock($lock);
+        }
     }
 
     /**
@@ -344,7 +380,7 @@ class Auth
      * @param string $passwordHash users.password 字段值
      * @return string
      */
-    private static function passwordFingerprint($passwordHash)
+    public static function passwordFingerprint($passwordHash)
     {
         return hash('sha256', (string) $passwordHash);
     }
@@ -403,7 +439,7 @@ class Auth
     public static function validate_password_strength_code($password, $username = '')
     {
         $len = mb_strlen($password);
-        if ($len < 8 || $len > 64) {
+        if ($len < 8 || $len > 64 || strpos($password, "\0") !== false) {
             return 'pwd_len';
         }
         $classes = 0;
@@ -443,6 +479,24 @@ class Auth
      */
     public static function changePassword($userId, $oldPassword, $newPassword)
     {
+        if ($oldPassword !== null && ((int) $userId !== self::id() || !self::confirmCurrentPassword($oldPassword))) {
+            blog_log('auth', 'password.change', 'fail', array('user_id' => (int) $userId, 'reason' => 'old_wrong'));
+            return array('ok' => false, 'code' => 'old_password_wrong', 'args' => array(), 'msg' => self::msgOf('old_password_wrong'));
+        }
+        $lock = 'login_' . (int) $userId;
+        if (!DB::lock($lock, 5)) {
+            return array('ok' => false, 'code' => 'throttled', 'args' => array(), 'msg' => self::msgOf('throttled'));
+        }
+        try {
+            return self::changePasswordLocked($userId, $oldPassword, $newPassword);
+        } finally {
+            DB::unlock($lock);
+        }
+    }
+
+    /** 账号锁内读取最新口令；历史记录和新口令必须一起提交。 */
+    private static function changePasswordLocked($userId, $oldPassword, $newPassword)
+    {
         $user = DB::query('users')->where('id', '=', (int) $userId)->first();
         if (!$user) {
             return array('ok' => false, 'code' => 'user_not_found', 'args' => array(), 'msg' => self::msgOf('user_not_found'));
@@ -464,26 +518,39 @@ class Auth
                 ->orderBy('id', 'DESC')
                 ->limit($historyCount)
                 ->select();
+            $history[] = array('password_hash' => $user['password']);
             foreach ($history as $row) {
                 if (password_verify($newPassword, $row['password_hash'])) {
+                    blog_log('auth', 'password.change', 'fail', array('user_id' => (int) $userId, 'reason' => 'pwd_history_hit'));
                     return array('ok' => false, 'code' => 'pwd_history_hit', 'args' => array($historyCount), 'msg' => self::msgOf('pwd_history_hit', array($historyCount)));
                 }
             }
-            DB::insert('password_history', array(
-                'user_id'       => (int) $userId,
-                'password_hash' => $user['password'],
-                'created_at'    => now(),
-            ));
         }
         $newHash = password_hash($newPassword, PASSWORD_DEFAULT);
-        DB::update('users', array(
-            'password'            => $newHash,
-            'password_changed_at' => now(),
-        ), array('id' => (int) $userId));
+        try {
+            DB::transaction(function () use ($user, $newHash, $historyCount) {
+                // 管理员重置也可能并发发生，旧哈希条件防止覆盖更新后的凭据。
+                $changed = DB::query('users')->where('id', '=', (int) $user['id'])->where('password', '=', $user['password'])
+                    ->update(array('password' => $newHash, 'password_changed_at' => now(), 'login_fail' => 0, 'locked_until' => null));
+                if ($changed !== 1) {
+                    throw new RuntimeException('Password identity changed');
+                }
+                if ($historyCount > 0) {
+                    DB::insert('password_history', array('user_id' => (int) $user['id'],
+                        'password_hash' => $user['password'], 'created_at' => now()));
+                }
+            });
+        } catch (Throwable $ex) {
+            blog_log('auth', 'password.change', 'fail', array('user_id' => (int) $userId, 'reason' => 'write_conflict'));
+            return array('ok' => false, 'code' => 'throttled', 'args' => array(), 'msg' => self::msgOf('throttled'));
+        }
         // 当前会话若是本人，同步刷新口令指纹保持登录态；其余会话指纹失配自动失效
         if (isset($_SESSION['uid']) && (int) $_SESSION['uid'] === (int) $userId) {
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                session_regenerate_id(true);
+            }
             $_SESSION['pwd_fp'] = self::passwordFingerprint($newHash);
-            unset($_SESSION['pwd_expired']);
+            unset($_SESSION['pwd_expired'], $_SESSION['_csrf'], $_SESSION['qq_login_state']);
             self::$user = null;
             self::$userLoaded = false;
         }

@@ -71,8 +71,8 @@ $commentActionsOn = !empty($commentAreaState['actions']);
 
     <?php if (!empty($commentAreaState['list'])): /* list=false 时评论区整体不渲染 */ ?>
     <?php do_action('comments_before', $singlePost); /* 插件注入点：评论区整体之前 */ ?>
-    <section class="comments-area">
-        <h2 class="comments-title"><?php echo e(theme_t('theme.comment.title', array(count($comments)))); ?></h2>
+    <section class="comments-area" id="comments">
+        <h2 class="comments-title"><?php echo e(theme_t('theme.comment.title', array(isset($commentTotal) ? $commentTotal : count($comments)))); ?></h2>
         <?php if (empty($comments)): ?>
         <p class="empty-tip"><?php echo e(theme_t('theme.comment.empty')); ?></p>
         <?php endif; ?>
@@ -81,8 +81,9 @@ $commentActionsOn = !empty($commentAreaState['actions']);
         // 组织为一层回复结构
         $topComments = array();
         $childComments = array();
+        $pageCommentIds = array_flip(array_column($comments, 'id'));
         foreach ($comments as $c) {
-            if ((int) $c['parent_id'] === 0) {
+            if ((int) $c['parent_id'] === 0 || !isset($pageCommentIds[(int) $c['parent_id']])) {
                 $topComments[] = $c;
             } else {
                 $childComments[(int) $c['parent_id']][] = $c;
@@ -95,12 +96,13 @@ $commentActionsOn = !empty($commentAreaState['actions']);
         $singlePostUrl = Router::url('post', array(
             'slug' => $singlePost['slug'] !== '' ? $singlePost['slug'] : (int) $singlePost['id'],
             'id'   => (int) $singlePost['id'],
+            'comment_page' => isset($commentPage) ? $commentPage : 1,
         ));
         $isOwnComment = function ($commentRow) {
             return Auth::check() && (int) $commentRow['user_id'] === Auth::id();
         };
         // 评论正文：命中编辑态时输出行内编辑表单，否则输出原文 + 操作行
-        $renderCommentBody = function ($commentRow) use ($isOwnComment, $singleEditId, $singlePostUrl, $commentActionsOn) {
+        $renderCommentBody = function ($commentRow) use ($isOwnComment, $singleEditId, $singlePostUrl, $commentActionsOn, $singlePost, $commentPage) {
             $cid = (int) $commentRow['id'];
             $own = $isOwnComment($commentRow);
             if ($own && $singleEditId === $cid) {
@@ -117,10 +119,10 @@ $commentActionsOn = !empty($commentAreaState['actions']);
             }
             echo '<div class="comment-content">' . nl2br(e($commentRow['content'])) . '</div>';
             if ($own && $commentActionsOn) {
-                // 伪静态回退模式下文章 URL 已含 ?r=，追加参数需改用 &
-                $sep = strpos($singlePostUrl, '?') === false ? '?' : '&';
+                $editUrl = Router::url('post', array('id' => (int) $singlePost['id'], 'slug' => $singlePost['slug'],
+                    'comment_page' => $commentPage, 'edit_comment' => $cid));
                 echo '<div class="comment-actions">';
-                echo '<a class="comment-action-link" href="' . e($singlePostUrl . $sep . 'edit_comment=' . $cid) . '#comment-' . $cid . '">' . e(theme_t('theme.comment.edit')) . '</a>';
+                echo '<a class="comment-action-link" href="' . e($editUrl) . '#comment-' . $cid . '">' . e(theme_t('theme.comment.edit')) . '</a>';
                 echo '<form class="comment-delete-form confirm-submit" data-confirm="' . e(theme_t('theme.comment.delete_confirm')) . '" method="post" action="' . e(Router::url('comment_delete')) . '">';
                 echo Csrf::field();
                 echo '<input type="hidden" name="comment_id" value="' . $cid . '">';
@@ -157,6 +159,8 @@ $commentActionsOn = !empty($commentAreaState['actions']);
             </li>
             <?php endforeach; ?>
         </ul>
+
+        <?php echo paginate(isset($commentPage) ? $commentPage : 1, isset($commentTotalPages) ? $commentTotalPages : 1, 'post', array('id' => (int) $singlePost['id'], 'slug' => $singlePost['slug'])); ?>
 
         <?php if (!empty($commentAreaState['form'])): /* form=false 时隐藏发表框（评论只读态） */ ?>
         <h3 class="comments-title"><?php echo e(theme_t('theme.comment.form_title')); ?></h3>

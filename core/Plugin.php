@@ -9,13 +9,10 @@ class Plugin
     /** @var array|null 插件元数据缓存 slug => meta */
     private static $cache = null;
 
-    /** @var string|null 当前正在执行的插件 slug（加载/钩子回调/设置页回调期间非空） */
-    private static $currentSlug = null;
-
     /** 当前执行上下文所属插件（内核上下文返回 null） */
     public static function currentSlug()
     {
-        return self::$currentSlug;
+        return PluginContext::current();
     }
 
     /**
@@ -26,9 +23,7 @@ class Plugin
      */
     public static function setCurrentSlug($slug)
     {
-        $prev = self::$currentSlug;
-        self::$currentSlug = $slug;
-        return $prev;
+        return PluginContext::set($slug);
     }
 
     /** @var array 验证码渠道声明：channel => 声明者 slug（请求内有效） */
@@ -152,9 +147,9 @@ class Plugin
         foreach (self::activeList() as $slug) {
             $file = APP_ROOT . '/plugins/' . $slug . '/' . $slug . '.php';
             if (is_file($file)) {
-                $prev = self::setCurrentSlug($slug);
-                require_once $file;
-                self::setCurrentSlug($prev);
+                PluginContext::run($slug, function () use ($file) {
+                    require_once $file;
+                });
             }
         }
     }
@@ -548,12 +543,10 @@ function plugin_data_write($slug, $scope, $userId, $key, $value, $ttl)
         'expires_at' => $ttl > 0 ? date('Y-m-d H:i:s', time() + (int) $ttl) : null,
         'updated_at' => now(),
     );
-    $exists = DB::query('plugin_data')->whereMap($where)->value('id');
-    if ($exists !== null) {
-        DB::update('plugin_data', $row, array('id' => (int) $exists));
-    } else {
-        DB::insert('plugin_data', array_merge($where, $row, array('created_at' => now())));
-    }
+    DB::query('plugin_data')->upsert(
+        array_merge($where, $row, array('created_at' => now())),
+        array('data_value', 'expires_at', 'updated_at')
+    );
 }
 
 /** 统一读取：行不存在或已过期返回缺省值 */

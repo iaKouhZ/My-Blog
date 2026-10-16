@@ -206,11 +206,12 @@ class AdminPlugin
             Admin::forbidden();
         }
         ob_start();
-        // 设置页回调执行期间置于该插件上下文：其内写入仅允许自身命名空间
-        $prev = Plugin::setCurrentSlug($slug);
-        call_user_func($pages[$slug]['callback']);
-        Plugin::setCurrentSlug($prev);
-        $contentHtml = ob_get_clean();
+        try {
+            PluginContext::run($slug, $pages[$slug]['callback']);
+            $contentHtml = ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
         Admin::render($pages[$slug]['title'], 'plugin_page', array('contentHtml' => $contentHtml));
     }
 

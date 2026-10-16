@@ -70,7 +70,7 @@ function smtp_mailer_client()
  */
 function smtp_mailer_send($handled, $scene, $target, $channel, $code)
 {
-    if ($handled === true || $channel !== 'email') {
+    if ($handled === true || $channel !== 'email' || get_verify_provider('email') !== 'smtp-mailer') {
         return $handled;
     }
     $client = smtp_mailer_client();
@@ -92,16 +92,7 @@ function smtp_mailer_send($handled, $scene, $target, $channel, $code)
         return false;
     }
 
-    DB::insert('verify_codes', array(
-        'scene'      => $scene,
-        'target'     => $target,
-        'code'       => $code,
-        'channel'    => 'email',
-        'expires_at' => date('Y-m-d H:i:s', time() + 600),
-        'used'       => 0,
-        'attempts'   => 0,
-        'created_at' => now(),
-    ));
+    VerificationService::recordSent($scene, $target, $code, 'email', 600);
     plugin_log('smtp.send', array('result' => 'success', 'scene' => $scene));
     return true;
 }

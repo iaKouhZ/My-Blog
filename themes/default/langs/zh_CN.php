@@ -197,4 +197,19 @@ return array(
     'theme.front.verify_retry'           => '发送过于频繁，请 60 秒后重试',
     'theme.front.verify_daily_limit'     => '今日发送次数已达上限',
     'theme.front.verify_unavailable'     => '发送渠道不可用',
+
+    /* ---------- 正文 Callout 默认标题（内核 core/Markdown.php 解析 > [!type] 时取用） ---------- */
+    'theme.callout.note'      => '笔记',
+    'theme.callout.abstract'  => '摘要',
+    'theme.callout.info'      => '信息',
+    'theme.callout.todo'      => '待办',
+    'theme.callout.tip'       => '提示',
+    'theme.callout.success'   => '成功',
+    'theme.callout.question'  => '问题',
+    'theme.callout.warning'   => '注意',
+    'theme.callout.failure'   => '失败',
+    'theme.callout.danger'    => '危险',
+    'theme.callout.bug'       => '缺陷',
+    'theme.callout.example'   => '示例',
+    'theme.callout.quote'     => '引述',
 );

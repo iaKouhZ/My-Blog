@@ -40,7 +40,7 @@ class AdminProfile
         $contactChanged = $email !== $oldEmail || $phone !== $user['phone'];
         if ($contactChanged) {
             // 敏感操作重验当前密码
-            if ($password === '' || !password_verify($password, $user['password'])) {
+            if (!Auth::confirmCurrentPassword($password)) {
                 blog_log('user', 'profile.update', 'fail', array('reason' => 'password_wrong'));
                 flash_set('error', admin_t('admin.profile.pwd_required'));
                 redirect(site_base_admin('profile'));
@@ -53,8 +53,8 @@ class AdminProfile
                 }
                 // 邮箱渠道已声明插件时，改绑邮箱必须通过新邮箱的验证码核验；未声明则免验
                 if (get_verify_provider('email') !== null) {
-                    $emailCode = input_text('email_code', '', 6, 'post');
-                    if (!Front::consumeVerifyCode('profile', $email, $emailCode, 'email')) {
+                    $emailCode = input_text('email_code', '', 7, 'post');
+                    if (!VerificationService::consume('profile', $email, $emailCode, 'email')) {
                         blog_log('user', 'profile.update', 'fail', array('reason' => 'email_code_wrong'));
                         flash_set('error', admin_t('admin.profile.email_code_wrong'));
                         redirect(site_base_admin('profile'));
@@ -70,8 +70,8 @@ class AdminProfile
                 }
                 // 短信渠道已声明插件时，改绑手机必须通过新手机的验证码核验；未声明则免验
                 if (get_verify_provider('sms') !== null) {
-                    $smsCode = input_text('sms_code', '', 6, 'post');
-                    if (!Front::consumeVerifyCode('profile', $phone, $smsCode, 'sms')) {
+                    $smsCode = input_text('sms_code', '', 7, 'post');
+                    if (!VerificationService::consume('profile', $phone, $smsCode, 'sms')) {
                         blog_log('user', 'profile.update', 'fail', array('reason' => 'sms_code_wrong'));
                         flash_set('error', admin_t('admin.profile.sms_code_wrong'));
                         redirect(site_base_admin('profile'));
@@ -80,13 +80,19 @@ class AdminProfile
             }
         }
 
-        DB::update('users', array(
-            'nickname'  => $nickname !== '' ? $nickname : $user['nickname'],
-            'signature' => $signature,
-            'email'     => $email !== '' ? $email : null,
-            'phone'     => $phone,
-            'avatar'    => $avatar,
-        ), array('id' => (int) $user['id']));
+        try {
+            UserService::update((int) $user['id'], array(
+                'nickname'  => $nickname !== '' ? $nickname : $user['nickname'],
+                'signature' => $signature,
+                'email'     => $email !== '' ? $email : null,
+                'phone'     => $phone,
+                'avatar'    => $avatar,
+            ));
+        } catch (UserConflictException $ex) {
+            blog_log('user', 'profile.update', 'fail', array('reason' => $ex->getMessage()));
+            flash_set('error', admin_t('admin.user.concurrent_conflict'));
+            redirect(site_base_admin('profile'));
+        }
         blog_log('user', 'profile.update', 'success', array(
             'contact_changed' => $contactChanged ? 1 : 0,
         ));

@@ -42,12 +42,12 @@ class AdminPost
 
         // 作者与分类映射
         $users = array();
-        $rows = DB::query('users')->select(array('id', 'nickname'));
+        $rows = DB::query('users')->whereIn('id', array_unique(array_column($posts, 'author_id')))->select(array('id', 'nickname'));
         foreach ($rows as $r) {
             $users[(int) $r['id']] = $r['nickname'];
         }
         $cats = array();
-        $rows = DB::query('categories')->select(array('id', 'name'));
+        $rows = DB::query('categories')->whereIn('id', array_unique(array_column($posts, 'category_id')))->select(array('id', 'name'));
         foreach ($rows as $r) {
             $cats[(int) $r['id']] = $r['name'];
         }
@@ -157,19 +157,6 @@ class AdminPost
             }
         }
 
-        // 文章审核开关：开启时无审核权者提交"发布"一律转 pending（moderate_posts 仅管理员持有，
-        // 等价于原 isAdmin 判断，合并两处冗余分支）；但编辑存量已发布文章（如改错别字）保留
-        // published 不下架——下架应走删除/回收站通道，而非编辑保存的副作用
-        $postAudit = Option::get('post_audit', '0') === '1';
-        if ($postAudit && !Auth::check_cap('moderate_posts')) {
-            $oldStatus = $id > 0 ? DB::query('posts')->where('id', '=', $id)->value('status') : null;
-            if ($oldStatus === 'published') {
-                $status = 'published';
-            } elseif ($status === 'published') {
-                $status = 'pending';
-            }
-        }
-
         $data = array(
             'title'       => $title,
             // 空别名存 NULL：唯一索引只允许 NULL 重复（空串重复会撞约束）
@@ -183,41 +170,21 @@ class AdminPost
             'updated_at'  => now(),
         );
 
-        if ($id > 0) {
-            $post = DB::query('posts')->where('id', '=', $id)->first();
-            if (!$post) {
-                flash_set('error', admin_t('admin.post.not_found'));
-                redirect(site_base_admin('post/list'));
-            }
-            if ((int) $post['author_id'] !== Auth::id() && !Auth::check_cap('edit_others_posts')) {
+        try {
+            PostService::save($id, $data, input_int('show_in_nav', 0, 'post') === 1);
+        } catch (PostWriteException $ex) {
+            if ($ex->getMessage() === 'forbidden') {
                 Admin::forbidden();
             }
-            DB::update('posts', $data, array('id' => $id));
-            blog_log('post', 'post.update', 'success', array('post_id' => $id, 'title' => $title, 'status' => $status));
-            $isNew = false;
-        } else {
-            $data['author_id'] = Auth::id();
-            $data['views'] = 0;
-            $data['created_at'] = now();
-            $id = DB::insert('posts', $data);
-            blog_log('post', 'post.create', 'success', array('post_id' => $id, 'title' => $title, 'status' => $status));
-            $isNew = true;
+            flash_set('error', admin_t($ex->getMessage() === 'busy' ? 'admin.common.busy' : 'admin.post.not_found'));
+            redirect(site_base_admin('post/list'));
+        } catch (PDOException $ex) {
+            if ((string) $ex->getCode() === '23000') {
+                flash_set('error', admin_t('admin.post.slug_taken'));
+                redirect(site_base_admin('post/edit' . ($id > 0 ? '&id=' . $id : '')));
+            }
+            throw $ex;
         }
-        // 保存完成钩子：插件在此持久化随文章的扩展数据（自有表单字段自行经输入校验器读取）
-        do_action('post_saved', $id, $data, $isNew);
-
-        // 侧边栏导航展示仅对独立页面生效：非独立页面即使传入该选项也一律忽略（下方 array_diff 同时会移除
-        // 其在导航中的既有记录，防止页面转回普通文章后残留）；新建页面默认不加入
-        $showInNav = $isPage === 1 && input_int('show_in_nav', 0, 'post') === 1;
-        $navIds = array();
-        foreach (Option::getJson('nav_page_ids', array()) as $navId) {
-            $navIds[] = (int) $navId;
-        }
-        $navIds = array_values(array_diff($navIds, array((int) $id)));
-        if ($showInNav) {
-            $navIds[] = (int) $id;
-        }
-        Option::set('nav_page_ids', array_values(array_unique($navIds)));
 
         flash_set('success', admin_t('admin.post.saved'));
         redirect(site_base_admin('post/list'));
@@ -255,14 +222,12 @@ class AdminPost
         Auth::require_cap('delete_posts');
         $id = input_int('id', 0, 'post');
         if ($id > 0) {
-            $post = DB::query('posts')->where('id', '=', $id)->where('status', '=', 'trash')->first();
-            if ($post) {
-                DB::delete('posts', array('id' => $id));
-                DB::delete('comments', array('post_id' => $id));
-                // 文章已不存在，插件可清理随文章的扩展数据
-                do_action('post_deleted', $id);
-                blog_log('post', 'post.destroy', 'success', array('post_id' => $id));
-                flash_set('success', admin_t('admin.post.destroyed'));
+            try {
+                if (PostService::destroy($id)) {
+                    flash_set('success', admin_t('admin.post.destroyed'));
+                }
+            } catch (PostWriteException $ex) {
+                flash_set('error', admin_t('admin.common.busy'));
             }
         }
         redirect(site_base_admin('post/list&status=trash'));

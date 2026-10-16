@@ -94,7 +94,7 @@ $statusTags = array(
                     <input type="hidden" name="id" value="<?php echo (int) $postItem['id']; ?>">
                     <input type="hidden" name="status" value="<?php echo e($status); ?>">
                     <input type="hidden" name="type" value="<?php echo e($type); ?>">
-                    <button class="layui-btn layui-btn-xs <?php echo empty($postItem['is_top']) ? 'layui-btn-primary' : ''; ?>" type="submit"><?php echo e(empty($postItem['is_top']) ? admin_t('admin.post.unpin') : admin_t('admin.post.pin')); ?></button>
+                    <button class="layui-btn layui-btn-xs <?php echo empty($postItem['is_top']) ? '' : 'layui-btn-primary'; ?>" type="submit"><?php echo e(empty($postItem['is_top']) ? admin_t('admin.post.pin') : admin_t('admin.post.unpin')); ?></button>
                 </form>
                 <?php endif; ?>
                 <?php if (Auth::check_cap('delete_posts')): ?>
