@@ -463,18 +463,7 @@ class Markdown
     /** 简易表格解析 */
     private function parseTable(array $rows)
     {
-        $splitRow = function ($row) {
-            $row = trim($row);
-            if (strpos($row, '|') === 0) {
-                $row = substr($row, 1);
-            }
-            if (substr($row, -1) === '|') {
-                $row = substr($row, 0, -1);
-            }
-            return array_map('trim', explode('|', $row));
-        };
-
-        $headCells = $splitRow($rows[0]);
+        $headCells = self::splitTableRow($rows[0]);
         // 外层滚动容器：宽表格在窄屏下横向滑动而不撑破页面
         $html = '<div class="table-wrap"><table><thead><tr>';
         foreach ($headCells as $cell) {
@@ -484,7 +473,7 @@ class Markdown
         // rows[0] 为表头；分隔行在 parseBlocks 收集阶段已排除，数据行自索引 1 开始
         $rowTotal = count($rows);
         for ($i = 1; $i < $rowTotal; $i++) {
-            $cells = $splitRow($rows[$i]);
+            $cells = self::splitTableRow($rows[$i]);
             $html .= '<tr>';
             foreach ($cells as $cell) {
                 $html .= '<td>' . $this->parseInline($cell) . '</td>';
@@ -492,6 +481,55 @@ class Markdown
             $html .= '</tr>';
         }
         return $html . '</tbody></table></div>';
+    }
+
+    /**
+     * 表格行按 | 切分单元格
+     *
+     * |x-a|、\left|…\right| 里的竖线是 TeX 语法而非列分隔符，直接 explode 会把
+     * 单元格拦腰拆开：公式只剩半个 $ 对，parseInline 匹配不到，KaTeX 便无从渲染。
+     * 故先按 parseInline 相同的规则把行内代码与行内公式换成不含 | 的占位符，
+     * 切分后再还原。两处规则必须保持一致，否则仍会出现"切分认为是文本、
+     * 渲染认为是公式"的错位。占位符带每次渲染的随机前缀，正文无法伪造。
+     *
+     * @param string $row 原始表格行
+     * @return array 单元格数组
+     */
+    private static function splitTableRow($row)
+    {
+        $row = trim($row);
+        if (strpos($row, '|') === 0) {
+            $row = substr($row, 1);
+        }
+        if (substr($row, -1) === '|') {
+            $row = substr($row, 0, -1);
+        }
+
+        $spans = array();
+        $prefix = '@@CBTBL' . bin2hex(random_bytes(8)) . '_';
+        // 顺序同 parseInline：代码先于公式，代码内的 $ 不参与公式匹配
+        $patterns = array(
+            '/`([^`]+)`/',
+            '/(?<![\$\\\\])\$([^\$\n]+?)\$(?!\$)/',
+        );
+        foreach ($patterns as $pattern) {
+            $row = preg_replace_callback($pattern, function ($m) use (&$spans, $prefix) {
+                $spans[] = $m[0];
+                return $prefix . (count($spans) - 1) . '@@';
+            }, $row);
+        }
+
+        $cells = array_map('trim', explode('|', $row));
+        if (empty($spans)) {
+            return $cells;
+        }
+        return preg_replace_callback(
+            '/' . preg_quote($prefix, '/') . '(\d+)@@/',
+            function ($m) use ($spans) {
+                return $spans[(int) $m[1]];
+            },
+            $cells
+        );
     }
 
     /** 还原公式占位为前端 KaTeX 容器 */
