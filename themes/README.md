@@ -21,7 +21,7 @@ themes/
     ├── login.php       ← 登录页
     ├── register.php    ← 注册页
     ├── forgot.php      ← 找回密码页
-    ├── functions.php   ← 可选：主题自有钩子挂载与助手函数
+    ├── functions.php   ← 可选：主题自有钩子挂载与助手函数（含插件整页外壳 theme_plugin_page_shell，见 §5.0）
     ├── settings.php    ← 可选：后台主题设置清单（声明式，内核据此渲染表单与校验保存）
     ├── langs/          ← 可选：主题语言包（xx_XX.php；多语言约定见 §4.3）
     ├── js/             ← 可选：主题自有脚本子目录（主题静态资源一律随主题目录存放）
@@ -36,7 +36,7 @@ themes/
 - 主题静态资源用 `Theme::assetsUrl('xxx.png')` 生成 URL；内核会自动追加
   `?v={文件修改时间}` 缓存版本号，文件更新后浏览器自动加载新版，
   主题无需也不得自行拼接版本参数；`assets_url()`（非主题资源）同理。
-  禁止引用任何 CDN 资源。
+  禁止引用任何 CDN 资源；需要展示第三方图床图片时走 `ext_img()` + 可信图床白名单（见 §7.3）。
 - **主题自有静态资源（脚本/样式/图片）必须随主题放在主题目录内**（可建
   `js/` 等子目录，参考 `themes/default/js/`），禁止放 `assets/`；仅内核
   跨场景共用脚本（前台与后台视图均引用的，如 `assets/front/verify.js`、
@@ -129,6 +129,8 @@ Description: 主题描述（后台列表展示，截断 40 字）
 | `copyright_line()` | 页脚版权行 |
 | `Theme::assetsUrl($path)` | 主题静态资源 URL |
 | `Theme::part($name)` | 引入局部模板（如 `Theme::part('sidebar')`） |
+| `Theme::renderPluginPage($innerHtml, $ctx)` | 插件整页渲染入口：设上下文 → `loadFunctions()` → 优先调用主题的 `theme_plugin_page_shell()`，未声明时降级为 `header`+`#content`+正文+`footer`。骨架由主题决定，插件不得自行拼接（见 §5.0） |
+| `ext_img($url, $opts)` | 外链图片输出（唯一允许的第三方图片输出方式）：https 且主机命中管理员配置的可信白名单时返回 `<img>`（自带 `referrerpolicy="no-referrer"` / `loading="lazy"`），否则返回**空串**，模板必须降级；`$opts` 支持 `alt`、`class` |
 | `theme_t($key, $args, $default)` | 主题文案翻译（查询链：当前语言包 → 主题中文基线 → `$default` → 原样返回键，支持 `%s` 占位） |
 | `Theme::locale()` | 前台 `<html lang>` 属性值（BCP47，如 `zh-CN`/`en-US`） |
 | `Theme::langCode()` | 当前主题语言码（如 `zh_CN`） |
@@ -275,6 +277,54 @@ add_filter('post_content', 'my_theme_content');
 可用钩子清单与语义见 `plugins/README.md` §3（主题与插件共享同一套 Hook 机制，
 常用：`front_head`、`front_footer`、`post_content`）。
 
+主题若需要放宽外链图片来源，唯一方式是返回管理员配置过的主机清单，
+**禁止在主题代码里硬编码域名**：
+
+```php
+add_filter('front_img_src_hosts', function ($hosts) {
+    // 主题设置里由管理员填写（一行为一个主机），此处只做透传与规范化
+    return array_merge((array) $hosts, ExternalMedia::sanitizeList(
+        preg_split('/[\r\n,;]+/', (string) theme_setting('img_hosts', ''))
+    ));
+});
+```
+
+`Theme::loadFunctions()` 也会在插件整页渲染自定义路由时被显式调用，
+因此这里挂的钩子不会因"非主题路由"而失效。
+
+### 5.0 插件整页渲染：`theme_plugin_page_shell()`（重要）
+
+插件认领自定义路由后需要"用主题骨架包裹自身正文"输出整页。**各主题的骨架分工并不统一**：
+
+| | 侧边栏位置 | `#content` 由谁开启 | 额外容器 |
+|---|---|---|---|
+| 默认主题 | `header.php` 内 | 页面模板 | 无 |
+| Argon | 页面模板内 | `header.php` | `#primary` + `<main>` 由页面模板开、`footer.php` 闭 |
+
+因此**插件不得自行拼接骨架**——必在其中一类主题上漏掉侧边栏或多闭合容器。正确做法是主题在
+`functions.php` 中声明自己的骨架：
+
+```php
+/**
+ * 插件整页外壳：插件经 Theme::renderPluginPage() 调用本函数输出整页
+ * @param string $innerHtml 插件正文 HTML（调用方已转义）
+ */
+function theme_plugin_page_shell($innerHtml)
+{
+    Theme::part('header');
+    // ……本主题的侧边栏/内容容器等，按自身页面模板的结构输出……
+    echo $innerHtml;
+    Theme::part('footer');
+}
+```
+
+插件侧只需 `Theme::renderPluginPage($innerHtml, array('title' => '…', 'page_type' => '…'))`，
+内核会先 `loadFunctions()` 再判定该函数是否存在。**未声明时降级**为默认主题的约定
+（`header` → `#content` → 正文 → `footer`），因此老主题不会因未实现而白屏，但侧边栏是否出现取决于其
+`header.php` 是否自带。新增主题建议都实现该函数，并在其中复用与 `page.php` 相同的容器结构。
+
+骨架函数内不要读取 `Theme::render()` 的局部变量，数据一律经 `cb_ctx()` 获取。
+
 ### 5.1 主题应触发的插件注入点
 
 注入点名称和参数保持不变。`comments_before/after` 包围当前页评论及分页导航，不代表一次渲染全部评论；读取总数请用 cb_ctx()['commentTotal']。
@@ -296,6 +346,12 @@ add_filter('post_content', 'my_theme_content');
 | `sidebar_widgets` | `sidebar.php` 分类分组之后（sidebar-body 内） | `do_action('sidebar_widgets')`，插件追加侧边栏分组/小工具，输出需自带 `.sidebar-section` 结构并自行转义 |
 
 缺失这些输出点不会报错，但会导致对应插件功能在新主题上无法展示。
+
+新主题若要支持「插件整页渲染」的场景（插件认领自定义路由后用主题骨架输出整页），
+**应实现 `theme_plugin_page_shell()`**（见 §5.0），在其中复用与 `page.php` 相同的容器结构；
+同时保证 `header.php` / `footer.php` 通过 `Theme::part()` 引入且不依赖 `Theme::render()`
+内的局部变量。未实现时内核降级为默认主题的骨架约定，侧边栏能否出现取决于
+`header.php` 是否自带。模板只从 `$GLOBALS['cb_ctx']` 或 `cb_ctx()` 取数据，即可被插件直接复用。
 
 ## 6. 启用、上传、删除与主题设置
 
@@ -348,7 +404,13 @@ add_filter('post_content', 'my_theme_content');
 1. 所有输出到 HTML 的变量必须 `e()` 转义；正文只准经 `render_content()` 输出。
 2. 模板内禁止直接操作 `DB`/`$_GET`/`$_POST`——数据一律来自注入的上下文或模板 API。
 3. 禁止任何运行时 CDN 引用（含字体、图片）；第三方资源本地化到 `assets/vendor/`。
-4. 前台文章页受受限 CSP 约束（仅 `'self'` 本地资源），内联脚本/外部 CDN 会被浏览器拦截。
+   **唯一例外是外链图片**：主题需要展示第三方图床/视频站封面时，主机必须由管理员
+   在「安全设置 → 外链图片信任」中声明（主题自身不得硬编码域名），输出统一走
+   `ext_img($url, $opts)`——未命中白名单时它返回**空串**，主题必须降级（占位块或纯文字），
+   禁止回退成手写 `<img src>`。详见 `plugins/README.md` §7.1。
+4. 前台文章页与独立页受受限 CSP 约束（默认仅 `'self'` 本地资源），内联脚本/外部 CDN 会被浏览器拦截；
+   CSP 的 `img-src` 会随上述可信图床白名单自动放宽（由 `ExternalMedia::cspHeader()` 统一生成，
+   主题**不得**自行 `header()` 覆写 CSP，否则多份 CSP 按交集生效、行为不可预期）。
 5. PHP 7.4 语法兼容（允许箭头函数、`??=` 等 7.4 特性；禁止仅 8.0+ 支持的语法/函数）。
 6. 每个 PHP 文件头部保留 `defined('APP_BOOT') or exit;` 守卫。
 

@@ -23,7 +23,17 @@
 - 登录失败锁定（5 次/10 分钟，可配；账号锁内重读状态与裁决，计数原子自增）+ IP 限流（锁内读取最新计数，IPv6 按 /64 归一计数）；会话 30 分钟无操作超时；改密后其余既有会话自动失效；锁定触发与其他认证失败使用相同提示，关闭提示差异造成的账号枚举侧信道
 - 验证码发送接口 IP 维度限流；发送与本地核验共用目标锁，错误计数原子递增；仅最新验证码可用，用完或作废后不回退旧码；提交时原子消费（防并发重放）；不设预检接口；错误容忍次数由发送插件管理（默认 2 次，内核钳制 1–5，错满即作废）；发送与核验留痕
 - 审计日志 CSV 导出做公式注入中和（防 Excel/WPS 公式执行）
+- 外链图片信任白名单（`options.img_ext_hosts`，默认**空** = 禁止一切外链图片）：管理员在
+  「安全设置 → 外链图片信任」声明可信图床主机（精确域名或 `*.example.com` 通配，拒绝 IP/端口），
+  内核据此生成文章页/独立页 CSP 的 `img-src`（其余指令不收窄也不放宽），并提供统一输出助手
+  `ext_img()`（自带 `referrerpolicy="no-referrer"`，未命中白名单返回空串）。插件/主题需展示第三方
+  封面时通过 `front_img_src_hosts` 过滤器注入主机：来源只能是管理员配置，或插件以**自身设置项默认值**
+  声明其功能直接依赖的主机（须可见可改、清空不回退），**渲染逻辑中禁止散落域名**；
+  详见 `plugins/README.md` §7.1 与 `plan.md` §12.11
 - 预装插件（默认禁用）：`smtp-mailer`（SMTP 发信）、`aliyun-sms`（阿里云短信验证码）、`comment-guard`（文章级评论管制：关闭/禁止三态）
+- 站点定制插件目录 `plugins/custom/`（`.gitignore` 忽略，仅保留说明文件）：与 `plugins/` 同权，
+  用于放按站点定制的插件；示例 `plugins/custom/bangumi-wall`（B 站指定 UID 追番封面墙）
+
 
 ## 环境要求
 
@@ -73,6 +83,7 @@ HTTP 环境下该属性不会错误下发。
 | 密码定期更换 | 预留完整、默认关闭（`pwd_expire_enabled=0`，可配 30-365 天） |
 | 密码历史防重复 | 预留完整、默认关闭（`pwd_history_count=0`） |
 | 文章/评论审核 | 默认关闭（开启后仅管理员可发布） |
+| 外链图片信任 | 默认关闭（`img_ext_hosts=[]`，即禁止一切外链图片；需管理员在「安全设置 → 外链图片信任」显式声明可信图床主机后才放宽 CSP `img-src`。插件可自带其功能直接依赖的主机默认值，如封面插件的 `i0.hdslb.com`） |
 
 口令策略（四个设密入口统一强制）：8-64 位、大小写/数字/特殊字符至少三类、
 不含用户名、不命中弱口令黑名单；改密必须验证原密码；改邮箱/手机等敏感操作重验密码。
@@ -191,7 +202,8 @@ index.php          前台单一入口（路由分发）
 config.php         安装程序生成（禁止 HTTP 访问）
 core/              内核（禁止 HTTP 访问，文件头部 APP_BOOT 守卫）
 themes/            模板（themes/default 为默认主题，开发指南见 themes/README.md）
-plugins/           插件（开发规范见 plugins/README.md）
+plugins/           插件（开发规范见 plugins/README.md）；plugins/custom/ 为站点定制插件目录
+                   （已 .gitignore，仅保留 README.md；与 plugins/ 同权，同名 slug 以 plugins/ 为准）
 assets/            静态资源；assets/vendor/ 为本地化第三方资源（登记见其 README），assets/front/ 为内核跨场景共用脚本，
                    assets/langs/ 为后台语言包目录（禁止 HTTP 直接访问）；主题自有资源随主题目录存放（如 themes/default/js/、
                    themes/default/langs/ 主题语言包，中文基线 langs/zh_CN.php 随主题发布勿删除）

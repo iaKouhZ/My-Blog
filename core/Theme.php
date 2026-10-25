@@ -117,13 +117,24 @@ class Theme
         if (!is_file($file)) {
             $file = self::dir() . '/index.php';
         }
-        // 模板函数文件（主题自有钩子/助手）
+        self::loadFunctions();
+        extract($ctx, EXTR_SKIP);
+        include $file;
+    }
+
+    /**
+     * 加载主题自有的 functions.php（主题注入点与钩子注册）
+     * 由 render() 自动调用；插件经自定义路由做整页渲染时也须先调用，
+     * 否则主题注册的 front_head/front_footer 钩子不会生效
+     *
+     * @return void
+     */
+    public static function loadFunctions()
+    {
         $functions = self::dir() . '/functions.php';
         if (is_file($functions)) {
             require_once $functions;
         }
-        extract($ctx, EXTR_SKIP);
-        include $file;
     }
 
     /** 引入主题局部模板（header/footer/sidebar 等） */
@@ -133,6 +144,39 @@ class Theme
         if (is_file($file)) {
             include $file;
         }
+    }
+
+    /**
+     * 渲染插件整页（插件认领自定义路由后，用主题骨架包裹自身正文）
+     *
+     * 为什么需要这个入口：各主题的骨架分工并不统一——默认主题由页面模板开启
+     * #content、侧边栏在 header.php 内；而 Argon 由 header.php 开启 #content、
+     * 侧边栏与 #primary/main 由页面模板自己输出。插件若自行拼接骨架，必然在其中
+     * 一类主题上漏掉侧边栏或多闭合容器。因此把「骨架怎么拼」交还给主题：
+     *
+     *  - 主题在 functions.php 中定义 theme_plugin_page_shell($innerHtml) 时，由它
+     *    输出完整外壳（自行决定侧边栏、内容容器、闭合位置）；
+     *  - 未定义时按默认主题的约定降级：header → #content → 正文 → footer。
+     *
+     * 主题定义的函数在 loadFunctions() 之后才存在，故必须先加载再判定。
+     *
+     * @param string $innerHtml 正文 HTML（调用方负责转义）
+     * @param array  $ctx       模板上下文（title/page_type 等，与 render() 同义）
+     * @return void
+     */
+    public static function renderPluginPage($innerHtml, array $ctx = array())
+    {
+        $GLOBALS['cb_ctx'] = array_merge(array('page_type' => 'plugin'), $ctx);
+        self::loadFunctions();
+        if (function_exists('theme_plugin_page_shell')) {
+            call_user_func('theme_plugin_page_shell', $innerHtml);
+            return;
+        }
+        self::part('header');
+        echo '<div id="content">' . "\n";
+        echo $innerHtml;
+        // 不在此闭合 #content：默认主题 footer.php 的约定是"页面模板只开启、由页脚统一闭合"
+        self::part('footer');
     }
 
     /**
@@ -291,6 +335,18 @@ function page_title()
 function cb_ctx()
 {
     return isset($GLOBALS['cb_ctx']) ? $GLOBALS['cb_ctx'] : array();
+}
+
+/**
+ * 设置模板上下文：供插件自定义路由做整页渲染时复用主题页头/页脚
+ * （Theme::render 之外唯一允许写入上下文的入口，避免插件直接操作 $GLOBALS['cb_ctx']）
+ *
+ * @param array $ctx 上下文键值对（title/page_type 等，与 Theme::render 同义）
+ * @return void
+ */
+function theme_set_context(array $ctx)
+{
+    $GLOBALS['cb_ctx'] = $ctx;
 }
 
 /** 站点作者卡片信息（首位管理员） */

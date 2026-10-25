@@ -290,6 +290,8 @@ function ins_do_install($dbConf, $admin)
         'pwd_history_count'       => '0',
         'ip_header_enabled'       => '0',
         'ip_header_name'          => 'X-Forwarded-For',
+        // 可信外链图床白名单：默认为空（等价于完全禁止外链图片，保持放宽前的安全水位）
+        'img_ext_hosts'           => '[]',
         'debug'                   => '0',
         'schema_version'          => '2',
     );

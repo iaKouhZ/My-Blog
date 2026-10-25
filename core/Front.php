@@ -247,8 +247,8 @@ class Front
         }
         unset($c);
 
-        // 前台文章页输出受限 CSP（仅允许 self 本地化资源）
-        header("Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'");
+        // 前台文章页输出受限 CSP（仅 self 本地化资源；img-src 按可信外链图床白名单动态放宽）
+        header('Content-Security-Policy: ' . ExternalMedia::cspHeader());
 
         // 评论行内编辑入口（?edit_comment={id}）：模板侧仅对本人评论渲染编辑表单，服务端提交时再次校验
         $editCommentId = Auth::check() ? input_int('edit_comment', 0, 'get') : 0;
@@ -280,7 +280,7 @@ class Front
             self::notFound();
             return;
         }
-        header("Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'");
+        header('Content-Security-Policy: ' . ExternalMedia::cspHeader());
         Theme::render('page', array(
             'page_type' => 'page',
             'title'     => $post['title'],

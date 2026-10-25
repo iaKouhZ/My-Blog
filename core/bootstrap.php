@@ -29,6 +29,7 @@ require APP_ROOT . '/core/PostService.php';
 require APP_ROOT . '/core/ThemeLocale.php';
 require APP_ROOT . '/core/ThemeData.php';
 require APP_ROOT . '/core/Theme.php';
+require APP_ROOT . '/core/ExternalMedia.php';
 
 /**
  * 错误处理：debug=0 时禁止向页面输出路径/SQL/堆栈，仅写服务器错误日志

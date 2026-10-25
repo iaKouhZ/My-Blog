@@ -42,9 +42,20 @@ class Plugin
     }
 
     /**
-     * 扫描 plugins/ 目录发现全部合法插件
+     * 插件根目录（相对 APP_ROOT）：内置插件在前、本地自定义插件在后。
+     * 同名 slug 以内置为准，防止本地目录遮蔽随包插件。
      *
-     * @return array slug => 元数据（name/description/version/author/has_settings）
+     * @return array
+     */
+    public static function roots()
+    {
+        return array('plugins', 'plugins/custom');
+    }
+
+    /**
+     * 扫描插件根目录发现全部合法插件
+     *
+     * @return array slug => 元数据（name/description/version/author/has_settings/dir）
      */
     public static function discover()
     {
@@ -52,27 +63,50 @@ class Plugin
             return self::$cache;
         }
         self::$cache = array();
-        $dir = APP_ROOT . '/plugins';
-        if (!is_dir($dir)) {
-            return self::$cache;
-        }
-        $items = scandir($dir);
-        foreach ($items as $item) {
-            if ($item === '.' || $item === '..') {
+        foreach (self::roots() as $rel) {
+            $dir = APP_ROOT . '/' . $rel;
+            if (!is_dir($dir)) {
                 continue;
             }
-            $main = $dir . '/' . $item . '/' . $item . '.php';
-            if (!is_file($main)) {
-                continue;
+            foreach (scandir($dir) as $item) {
+                if (!preg_match('/^[a-z0-9-]{1,64}$/', $item) || isset(self::$cache[$item])) {
+                    continue;
+                }
+                $main = $dir . '/' . $item . '/' . $item . '.php';
+                if (!is_file($main)) {
+                    continue;
+                }
+                $meta = self::parseMeta($main);
+                if ($meta === null) {
+                    continue;
+                }
+                $meta['slug'] = $item;
+                // 记录插件实际所在目录，供加载/卸载/静态资源 URL 复用（不再假设只有 plugins/ 一层）
+                $meta['dir'] = $rel . '/' . $item;
+                self::$cache[$item] = $meta;
             }
-            $meta = self::parseMeta($main);
-            if ($meta === null) {
-                continue;
-            }
-            $meta['slug'] = $item;
-            self::$cache[$item] = $meta;
         }
         return self::$cache;
+    }
+
+    /**
+     * 定位插件目录（内置优先，其次 plugins/custom/）
+     *
+     * @param string $slug 插件 slug
+     * @return string 绝对路径；不存在返回空串
+     */
+    public static function locate($slug)
+    {
+        if (!preg_match('/^[a-z0-9-]{1,64}$/', $slug)) {
+            return '';
+        }
+        foreach (self::roots() as $rel) {
+            $dir = APP_ROOT . '/' . $rel . '/' . $slug;
+            if (is_file($dir . '/' . $slug . '.php')) {
+                return $dir;
+            }
+        }
+        return '';
     }
 
     /**
@@ -145,12 +179,14 @@ class Plugin
     public static function loadActive()
     {
         foreach (self::activeList() as $slug) {
-            $file = APP_ROOT . '/plugins/' . $slug . '/' . $slug . '.php';
-            if (is_file($file)) {
-                PluginContext::run($slug, function () use ($file) {
-                    require_once $file;
-                });
+            $dir = self::locate($slug);
+            if ($dir === '') {
+                continue;
             }
+            $file = $dir . '/' . $slug . '.php';
+            PluginContext::run($slug, function () use ($file) {
+                require_once $file;
+            });
         }
     }
 
@@ -204,9 +240,9 @@ class Plugin
      */
     public static function uninstall($slug)
     {
-        $dir = APP_ROOT . '/plugins/' . $slug;
+        $dir = self::locate($slug);
         // 防路径穿越：slug 必须为纯小写字母数字连字符
-        if (!preg_match('/^[a-z0-9-]{1,64}$/', $slug) || !is_dir($dir)) {
+        if ($dir === '') {
             return false;
         }
         self::deactivate($slug);
@@ -227,7 +263,7 @@ class Plugin
      */
     public static function purgeOrphanData($slug)
     {
-        if (!preg_match('/^[a-z0-9-]{1,64}$/', $slug) || is_dir(APP_ROOT . '/plugins/' . $slug)) {
+        if (!preg_match('/^[a-z0-9-]{1,64}$/', $slug) || self::locate($slug) !== '') {
             return false;
         }
         self::cleanupData($slug);
@@ -374,7 +410,18 @@ function plugin_option_update($slug, $key, $value)
  */
 function plugin_url($slug, $path = '')
 {
-    return Router::base() . '/plugins/' . $slug . '/' . ltrim($path, '/');
+    // slug 必须是合法插件名：非法值直接返回空串，避免 ../ 之类拼出越权路径
+    if (!preg_match('/^[a-z0-9-]{1,64}$/', $slug)) {
+        return '';
+    }
+    $path = ltrim($path, '/');
+    // 插件可能位于 plugins/ 或 plugins/custom/，URL 必须跟随实际目录
+    foreach (Plugin::roots() as $rel) {
+        if (is_dir(APP_ROOT . '/' . $rel . '/' . $slug)) {
+            return Router::base() . '/' . $rel . '/' . $slug . '/' . $path;
+        }
+    }
+    return Router::base() . '/plugins/' . $slug . '/' . $path;
 }
 
 /**
@@ -402,7 +449,12 @@ function plugin_lang_pack($plugin, $code)
     if (!preg_match('/^[a-z0-9][a-z0-9_-]*$/', $plugin) || !preg_match('/^[a-z]{2}_[A-Z]{2}$/', $code)) {
         return array();
     }
-    $file = APP_ROOT . '/plugins/' . $plugin . '/langs/' . $code . '.php';
+    // 插件可能在 plugins/ 或 plugins/custom/，语言包跟随实际目录
+    $dir = Plugin::locate($plugin);
+    if ($dir === '') {
+        return array();
+    }
+    $file = $dir . '/langs/' . $code . '.php';
     if (!is_file($file)) {
         return array();
     }

@@ -136,6 +136,16 @@ class AdminSetting
         }
         Option::set('ip_header_name', $headerName);
 
+        // 可信外链图片主机：每行一条（也接受逗号/空格分隔），逐条规范化，非法条目静默丢弃
+        $hostLines = input_text('img_ext_hosts_text', '', 4000, 'post');
+        $rawHosts = preg_split('/[\r\n,;]+/', $hostLines);
+        $hosts = ExternalMedia::sanitizeList(is_array($rawHosts) ? $rawHosts : array());
+        $hostsJson = json_encode($hosts);
+        if ((string) Option::get(ExternalMedia::OPTION_KEY, '[]') !== $hostsJson) {
+            $changed[] = ExternalMedia::OPTION_KEY;
+        }
+        Option::set(ExternalMedia::OPTION_KEY, $hostsJson);
+
         blog_log('security', 'setting.security', 'success', array('changed' => $changed));
         flash_set('success', admin_t('admin.setting.security_saved'));
         redirect(site_base_admin('setting/security'));

@@ -4,21 +4,33 @@
 
 ## 1. 目录结构
 
-每个插件是 `plugins/{slug}/` 目录，主文件必须为 `{slug}.php`：
+每个插件是 `{root}/{slug}/` 目录，主文件必须为 `{slug}.php`：
 
 ```
 plugins/
-└── hello-world/
-    ├── hello-world.php    ← 主文件（必需）
-    └── langs/             ← 语言包（可选，见 §4.3；zh_CN.php 为基线）
-        ├── zh_CN.php
-        └── en_US.php
+├── hello-world/           ← 随包发布（入库、可被他人复用）
+│   ├── hello-world.php    ← 主文件（必需）
+│   └── langs/             ← 语言包（可选，见 §4.3；zh_CN.php 为基线）
+│       ├── zh_CN.php
+│       └── en_US.php
+└── custom/                ← 站点自建/定制插件（.gitignore 忽略，仅 README.md 入库）
+    └── bangumi-wall/
+        └── bangumi-wall.php
 ```
 
+- **两个插件根目录**：`plugins/` 用于随包发布、可复用的插件；`plugins/custom/` 用于
+  「只属于这个站点」的定制插件——它已被 `.gitignore` 忽略（仅保留 `plugins/custom/README.md`），
+  因此写在那里的插件不会被提交、不会被上游更新影响，适合放站点特有的抓取逻辑、
+  内网地址、个性化展示。
+- 两个根目录由同一套机制发现（`Plugin::roots()`），管理页、启用/禁用、卸载、日志、
+  语言包、`plugin_url()` 全部一视同仁；**同名 slug 冲突时 `plugins/` 优先**（随包插件不会被
+  本地副本意外覆盖）。
 - `slug` 只允许小写字母、数字、连字符（`[a-z0-9-]{1,64}`）。
 - 主文件缺失或头部元数据缺少 `Plugin Name` 的目录不会被识别为插件。
-- 插件静态资源（JS/CSS/图片）放在插件目录内，用 `plugin_url($slug, $path)` 生成 URL；
-  禁止引用任何 CDN 资源。
+- 插件静态资源（JS/CSS/图片）放在插件目录内，用 `plugin_url($slug, $path)` 生成 URL
+  （该函数会自动定位到插件实际所在的根目录）。
+- **JS/CSS/字体禁止引用任何 CDN**，必须随插件目录存放。唯一例外是**外链图片**，
+  见 §7「外链图片（唯一允许的第三方运行时资源）」。
 
 ### 1.1 后台 zip 上传安装
 
@@ -31,6 +43,8 @@ plugins/
 - 同名插件执行**覆盖更新**：新旧包 `Plugin Name` 不一致时拒绝（防同名异插件误覆盖）；
   旧目录自动备份、失败回滚，启用中的插件覆盖后保持启用。覆盖记 `plugin.update` 审计
   （新装记 `plugin.upload`），成败均留痕。
+- **更新就地覆盖**：已存在的插件（含 `plugins/custom/` 下的）在原目录覆盖，不会因为上传
+  而被搬到 `plugins/`；只有全新安装才落 `plugins/`。
 
 ## 2. 头部元数据
 
@@ -85,6 +99,7 @@ defined('APP_BOOT') or exit;
 | `password_blacklist` | filter | `$list` | 扩展弱口令黑名单 |
 | `route_parse` | filter | `$route, $path` | 未知路径落入 404 前认领自定义路由 |
 | `front_route_{路由名}` | action | `$params` | 接管经 `route_parse` 认领的路由 |
+| `front_img_src_hosts` | filter | `$hosts` | 追加本插件的可信外链图床主机，内核据此放宽 CSP `img-src` 并放行 `ext_img()`。域名须来自管理员配置或本插件设置项默认值（见 §7.1），**禁止在渲染逻辑中散落域名** |
 | `auth_form_footer` | action | `$page` | 认证表单下方注入点（主题触发；`$page` 为 `login`/`register`/`forgot`，回调应按参数区分页面） |
 | `post_card_before` / `post_card_after` | action | `$post, $context` | 列表页文章卡片前/后注入点（主题触发，适合加徽标/推荐位等） |
 | `single_content_after` | action | `$post` | 文章详情正文结束后、评论区前（主题触发，如打赏/转载/相关推荐） |
@@ -142,7 +157,14 @@ QQ 插件认领 `qqlogin/start`（GET 点击后发起登录）、`qqlogin-callba
 | `plugin_register_table($slug, $name)` | 登记自建表（卸载时内核自动 DROP） |
 | `plugin_table($slug, $name)` | 自建表完整表名（含前缀） |
 | `plugin_log($action, $detail)` | 写统一审计日志（category 固定 plugin） |
-| `plugin_url($slug, $path)` | 插件静态资源 URL |
+| `plugin_url($slug, $path)` | 插件静态资源 URL（自动定位插件实际所在的根目录，`plugins/` 或 `plugins/custom/`） |
+| `ext_img($url, $opts)` | 外链图片输出：仅当 URL 为 https 且主机命中可信白名单时返回 `<img>`（自带 `referrerpolicy="no-referrer"` / `loading="lazy"`），否则返回**空串**；`$opts` 支持 `alt`、`class`。调用方必须按空串降级，禁止绕过它直接写 `<img src>` |
+| `ExternalMedia::sanitizeList($list)` | 主机清单规范化（小写、去重、`*.` 通配校验、拒绝 IP/端口/userinfo/localhost、上限 32 条），插件设置页保存时复用，保证与内核判定同源 |
+| `ExternalMedia::isAllowedUrl($url)` | 判定单个 URL 是否可信（https + 主机命中），用于自定义渲染逻辑 |
+| `ExternalMedia::imgTag($url, $opts)` | `ext_img()` 的类实现，语义完全一致 |
+| `Theme::loadFunctions()` | 加载当前主题 `functions.php`。`Theme::renderPluginPage()` 内部会自动调用，通常无需手动调 |
+| `Theme::renderPluginPage($innerHtml, $ctx)` | **插件整页渲染的推荐入口**（优先于手工 `Theme::part()` 拼接）：设上下文 → `loadFunctions()` → 调用主题声明的 `theme_plugin_page_shell()`；主题未声明时降级为 `header`+`#content`+正文+`footer`。**不要自己拼骨架**——各主题的侧边栏位置与容器分工不同，手工拼接会在部分主题上漏侧边栏或多闭合 `</div>`（见 `themes/README.md` §5.0） |
+| `theme_set_context($ctx)` | 设置模板上下文（`title`/`page_type` 等）。`Theme::render()` 与 `Theme::renderPluginPage()` 都会写入，单独使用主要用于兼容旧写法 |
 | `register_verify_provider($channel)` | 声明验证码渠道能力（仅插件加载期可调，强制归属当前插件） |
 | `get_verify_provider($channel)` | 查询渠道声明者 slug（未声明返回 null） |
 | `VerificationService::recordSent($scene,$target,$code,$channel,$ttl=600)` | 已声明渠道的插件在成功发送后统一登记本地验证码；当前归属必须匹配渠道声明者；有效期钳制 1–3600 秒 |
@@ -290,7 +312,63 @@ function hello_world_page()
     插件间的配置/数据篡改路径，不构成完整沙箱。
 7. **插件激活即执行 PHP 代码**：启用插件后其主文件随每次请求被内核加载，等同于
    把站点代码执行权交给插件作者。只安装/启用来源可信的插件；`plugins/` 下 PHP
-   直接访问由重写规则拦截（宝塔面板可能因自带 PHP 规则优先匹配而失效，见根 README 伪静态节）。
+   直接访问由重写规则拦截（宝塔面板可能因自带 PHP 规则优先匹配而失效，见根 README 伪静态节）。该规则同样覆盖
+   `plugins/custom/`（子路径已包含在 `plugins/` 前缀规则内）。
+
+### 7.1 外链图片（唯一允许的第三方运行时资源）
+
+插件需要展示第三方站点（图床、B 站封面等）的图片时，唯一合法路径是**可信图床白名单**：
+
+```php
+// 1) 在设置页收集主机（管理员显式声明），保存时用内核规范化函数
+$hosts = ExternalMedia::sanitizeList(preg_split('/[\r\n,;]+/', input_text('img_hosts', '', 4000, 'post')));
+plugin_option_update('my-plugin', 'img_hosts', implode("\n", $hosts));
+
+// 2) 把本插件声明的主机注入内核白名单（CSP 与渲染校验同源）
+add_filter('front_img_src_hosts', function ($incoming) {
+    $raw = (string) plugin_option('my-plugin', 'img_hosts', '');
+    return array_merge((array) $incoming, ExternalMedia::sanitizeList(preg_split('/[\r\n,;]+/', $raw)));
+});
+
+// 3) 输出时只走 ext_img()，并为空串准备降级
+$img = ext_img($coverUrl, array('alt' => $title, 'class' => 'my-cover'));
+echo $img !== '' ? $img : '<span class="my-cover-none">' . e('封面未展示') . '</span>';
+```
+
+四条硬性约束（缺一即视为违规）：
+
+1. **默认关闭**：`options.img_ext_hosts` 为空数组且无插件/主题声明时，任何外链图片都不得输出，
+   站点行为与"全部资源本地化"完全一致。
+2. **域名来源只有两种**：
+   (a) 管理员在「安全设置 → 外链图片信任」填写；
+   (b) 插件**以自身设置项的默认值**声明该功能直接依赖的主机（如封面站的 CDN）。
+
+   ```php
+   // 允许：作为设置项默认值，默认值在设置页可见、可改、可清空
+   define('MY_PLUGIN_DEFAULT_HOSTS', 'i0.hdslb.com');
+   $raw = (string) plugin_option('my-plugin', 'img_hosts', MY_PLUGIN_DEFAULT_HOSTS);
+   ```
+
+   走 (b) 时必须满足三条：**默认值在设置页可见可改**；**管理员清空后不得回退默认**
+   （`plugin_option()` 的默认值天然满足这点——只有 option 从未写入时才生效，存了空串就尊重清空）；
+   **不得把与本插件功能无关的第三方站点塞进默认值**。除此以外，仍**禁止**在渲染逻辑、
+   数组字面量、多处分支里散落域名。
+3. **只能经 `ext_img()` / `ExternalMedia::imgTag()` 输出**：这两个函数对未命中白名单的
+   URL 返回空串；调用方必须降级（占位块、纯文字），**禁止回退成直接 `<img src>`**。
+4. **不要自己写 CSP**：`img-src` 由 `ExternalMedia::cspHeader()` 依据同一份白名单统一生成，
+   插件另发 `header()` 会造成页面出现多个 CSP 头、按交集生效，等于随机失效。
+
+补充说明：
+
+- 主机规则仅接受精确域名或 `*.example.com` 形式的一级通配；IP 字面量、端口、
+  `userinfo@`、`localhost` 会被丢弃，单次上限 32 条。
+- 第三方图床普遍按 `Referer` 防盗链（B 站 CDN 对非 B 站 Referer 返回 403，对无 Referer 返回 200），
+  所以 `ext_img()` 固定输出 `referrerpolicy="no-referrer"`；自行拼接的 `<img>` 不会有这个属性。
+- 图片由**访客浏览器直连第三方 CDN**，本站不代理、不转存，也不做 SSRF 检查（不存在服务端请求）；
+  代价是第三方可见访客 IP，这一点必须写在插件的设置页提示里告知管理员。
+- 需要"服务端抓取并本地化"的场景（需要防盗链绕过、需要统一裁剪）不属于本机制范围，
+  应下载到 `uploads/` 再按本站资源引用。
+
 
 ## 8. 完整示例
 
@@ -302,3 +380,8 @@ function hello_world_page()
   旧版本 `plugin_data` 中的 `rl_*` 临时计数按既有到期清理机制回收，无需迁移。
 - `plugins/comment-guard/`：文章级评论三态管制——后台表单注入（`post_edit_fields`/`post_saved`）、
   服务端评论写拦截（`comment_write_allowed`）、前台条件渲染（`comment_area_state`）的组合实战。
+- `plugins/custom/bangumi-wall/`：**站点定制插件示例**（位于 `plugins/custom/`，不入库）——
+  自定义路由 `bangumi` 整页渲染（`route_parse` + `front_route_*` + `Theme::renderPluginPage()`）、
+  服务端 HTTP 抓取与 `plugin_data_*` TTL 缓存、
+  `sidebar_widgets` 侧边栏小工具、`front_img_src_hosts` 外链图床白名单接入的完整实战。
+

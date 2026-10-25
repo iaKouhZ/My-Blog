@@ -6,6 +6,9 @@ my-blog.zip
 /core/tests/
 /tests/
 
+# 本地安全审阅报告不随源码交付
+/SECURITY_REVIEW.md
+
 # 安装程序生成的敏感文件（含数据库凭据与站点密钥），禁止入库
 config.php
 install/install.lock
@@ -13,3 +16,8 @@ install/install.lock
 # 用户上传内容不入库；保留 .htaccess 禁止 PHP 执行的安全规则
 uploads/*
 !uploads/.htaccess
+
+# 本地自定义插件目录：随站点自建、按站点定制，不入库；
+# 仅保留说明文件，便于新环境拉起后仍有该目录与约定说明
+/plugins/custom/*
+!/plugins/custom/README.md

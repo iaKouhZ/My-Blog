@@ -37,3 +37,18 @@ function default_theme_render_js()
     }
     echo '<script src="' . e(Theme::assetsUrl('js/render.js')) . '"></script>' . "\n";
 }
+
+/**
+ * 插件整页外壳：本主题的 header.php 自带侧边栏与 #main，
+ * 页面模板只需开启 #content，由 footer.php 统一闭合
+ *
+ * @param string $innerHtml 插件正文 HTML（调用方已转义）
+ * @return void
+ */
+function theme_plugin_page_shell($innerHtml)
+{
+    Theme::part('header');
+    echo '<div id="content">' . "\n";
+    echo $innerHtml;
+    Theme::part('footer');
+}

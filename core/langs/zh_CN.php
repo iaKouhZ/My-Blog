@@ -328,6 +328,7 @@ return array(
     'admin.security.group_password'      => '口令策略',
     'admin.security.group_ip'            => '客户端 IP',
     'admin.security.group_log'           => '审计日志',
+    'admin.security.group_media'         => '外链图片信任',
     'admin.security.group_debug'         => '调试',
     'admin.security.login_max_fail'      => '连续登录失败锁定阈值（次，默认 5）',
     'admin.security.lock_minutes'        => '锁定时长（分钟，默认 10）',
@@ -342,6 +343,9 @@ return array(
     'admin.security.ip_header_name_hint' => '按顺序依次尝试，某个标头取到合法 IP 即停止；均取不到时使用 REMOTE_ADDR。',
     'admin.security.ip_warn'             => '警告：仅在站点部署于可信反向代理/CDN 之后才可开启此项。若服务器直接暴露公网却信任 X-Forwarded-For 等标头，攻击者可伪造 IP 绕过限流与审计。',
     'admin.security.log_retention'       => '日志留存天数（下限 180 天，默认 180）',
+    'admin.security.img_hosts'           => '可信外链图床主机（每行一条，如 i0.hdslb.com 或 *.hdslb.com）',
+    'admin.security.img_hosts_hint'      => '仅这些主机上的 https 图片会被前台允许输出（同时写入文章页 CSP 的 img-src）。留空表示完全禁止外链图片；支持 *.example.com 形式匹配子域名，不支持 IP 与端口。',
+    'admin.security.img_hosts_warn'      => '放宽前请确认：①访客浏览器将直连这些主机，其 IP 与 UA 会暴露给第三方；②第三方下架图片会导致裂图；③第三方可借此统计访客。仅填写你确实信任的图床/静态资源域名。',
     'admin.security.debug'               => '调试模式',
     'admin.security.debug_hint'          => '生产环境必须关闭；开启后错误详情会输出到页面',
 
