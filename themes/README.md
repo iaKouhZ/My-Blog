@@ -185,6 +185,37 @@ article .tex-block { overflow-x: auto; }   /* KaTeX 块级公式内部 nowrap */
 `.tex-block` 同样需要滚动——KaTeX 的 `.katex-display > .katex` 是
 `white-space: nowrap` 且自身不带溢出处理，不加外层滚动会直接撑破窄屏版心。
 
+#### 只写 `overflow-x: auto` 会长出假滚动条（务必按下面完整写法实现）
+
+`overflow-x: auto` 会按 CSS 规范把 `overflow-y` 从 `visible` 计算成 `auto`；
+而 KaTeX 的分式、根式、求和、积分、连乘都用**负边距 + vlist** 排版，字形墨迹
+本来就天然越出盒子 3~6px（正常流里无害，只是画到盒外）。两者叠加导致
+**宽度根本没超的公式也满足 `scrollHeight > clientHeight`**，长出竖向滚动条；
+竖向滚动条又会吃掉横向空间，把原本放得下的公式反过来挤成横向可滚。
+
+因此主题必须用下面这套写法（默认主题与 Argon 主题均已落地）：
+
+```css
+.tex-inline, .article-content .tex-block {
+    overflow-x: auto;              /* 保留：超宽公式仍需可滚，否则撑破版心 */
+    overflow-y: hidden;            /* 关掉竖向滚动条 */
+    padding-block: 0.4em;          /* 把越界墨迹包进盒子，否则分母被裁 */
+    margin-block: -0.4em;          /* 等量负外边距抵消，行距不变 */
+    padding-inline-end: 0.2em;     /* 吸收根号横线的 2px 外溢 */
+    margin-inline-end: -0.2em;     /* 抵消，占位宽度不变 */
+}
+```
+
+- `padding-block` 取 **0.4em** 是实测结果：低于 0.35em 时仍有公式
+  （分式/积分/连乘/根式）`scrollHeight` 大于 `clientHeight`，即墨迹被裁；
+  0.4em 在 15px / 17px / 19px 三档字号下均无竖向溢出，留有余量。
+- `padding-inline-end` 是给根号横线的：KaTeX 的 `.sqrt > .root` 带
+  `margin-right: -.5556em`，横线尾端越出盒子约 2px，会让**没超宽的根式**
+  也出现横向滚动条。
+- `.tex-block` 的 `margin-block` 要写成 `calc(<原上下边距> - 0.4em)`，
+  例如默认主题原为 `1.5em`，Argon 为 `1rem`。
+- 行距不受影响：实测修复前后同一段落高度逐位相同。
+
 表格单元格内的 `|` 只有在行内代码与 `$...$` 公式之外才是列分隔符，
 所以 `| $\exists M>0,\ |f(x)|\le M$ |` 这样的绝对值竖线可以正常书写。
 

@@ -118,6 +118,7 @@ HTTP 环境下该属性不会错误下发。
 
 - 表格单元格内的 `|` 不再无条件当作列分隔符：`core/Markdown.php` 切分前先把行内代码与 `$...$` 公式换成随机前缀占位符，切分后还原。此前 `| $\exists M>0,\ \forall x\in D,\ |f(x)|\le M$ |` 会被 `explode('|')` 拦腰拆成 4 个单元格，公式只剩半个 `$` 对，KaTeX 无法渲染、页面直接露出 `$\exists …` 原文。切分规则与行内解析规则保持一致，避免"切分视为文本、渲染视为公式"的错位。
 - 表格外层 `div.table-wrap` 与 `.tex-block` 补齐横向滚动，窄屏下宽表格与超长公式改为容器内滑动，不再撑破版心或逐字折行。Argon 主题已在 `themes/argon/assets/main.css` 落地；其他主题需按 `themes/README.md` §4.2 补同名规则。
+- 公式滚动条修正：只写 `overflow-x: auto` 会让 `overflow-y` 连带变成 `auto`，而 KaTeX 分式/根式等墨迹天然越界 3~6px，于是**宽度没超的公式也长出竖向滚动条**；竖向条又吃掉横向空间，把放得下的公式挤成横向可滚。默认主题与 Argon 主题均已改为 `overflow-y: hidden` + `padding-block: 0.4em`（配等量负边距，行距不变）+ 右侧 `padding-inline-end: 0.2em`（吸收根号横线外溢）。完整写法与取值依据见 `themes/README.md` §4.2。
 
 本次无数据库结构变更，无需执行升级 SQL，备份后整体部署代码即可；正文为 Markdown 原文，历史内容无需回填。
 
