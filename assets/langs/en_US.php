@@ -328,6 +328,7 @@ return array(
     'admin.security.group_password'      => 'Password Policy',
     'admin.security.group_ip'            => 'Client IP',
     'admin.security.group_log'           => 'Audit Log',
+    'admin.security.group_media'         => 'External Image Trust',
     'admin.security.group_debug'         => 'Debug',
     'admin.security.login_max_fail'      => 'Consecutive login failures before lockout (times, default 5)',
     'admin.security.lock_minutes'        => 'Lockout duration (minutes, default 10)',
@@ -342,6 +343,9 @@ return array(
     'admin.security.ip_header_name_hint' => 'Headers are tried in order; the first valid IP wins. REMOTE_ADDR is used when none yields a valid IP.',
     'admin.security.ip_warn'             => 'Warning: enable this only when the site sits behind a trusted reverse proxy/CDN. If the server is directly exposed to the Internet while trusting headers like X-Forwarded-For, attackers can spoof IPs to bypass rate limiting and auditing.',
     'admin.security.log_retention'       => 'Log retention days (minimum 180, default 180)',
+    'admin.security.img_hosts'           => 'Trusted external image hosts (one per line, e.g. i0.hdslb.com or *.hdslb.com)',
+    'admin.security.img_hosts_hint'      => 'Only https images from these hosts may be rendered on the front end (the same list is injected into the img-src of the post/page CSP). Empty means all external images are blocked. Wildcards like *.example.com are supported; IPs and ports are not.',
+    'admin.security.img_hosts_warn'      => 'Before relaxing, note: (1) visitors\' browsers connect to these hosts directly, exposing their IP and UA to the third party; (2) removed images will break; (3) the third party can profile visitors. Only list image hosts you actually trust.',
     'admin.security.debug'               => 'Debug mode',
     'admin.security.debug_hint'          => 'Must be off in production; when on, error details are printed to pages',
 

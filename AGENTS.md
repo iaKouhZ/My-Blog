@@ -25,9 +25,19 @@
 
 1. **单一入口 + 伪静态**：前台请求一律经根 `index.php` 路由分发；禁止新建可被浏览器直接访问的功能性 PHP 脚本（`install/`、`user/` 的入口文件除外）。
 2. **URL 生成**：所有站内链接必须由 `Router::url()` 生成，禁止在模板/代码中手写站内路径（重写模式切换时必须不破坏链接）。
-3. **目录职责**：内核代码只允许放 `core/`；模板只允许放 `themes/`；**主题自有的静态资源（脚本/样式/图片）必须随主题放在对应主题目录内（`themes/{主题}/`，可建子目录如 `js/`），经 `Theme::assetsUrl()` 引用，禁止放 `assets/`**；插件只允许放 `plugins/`（插件自有资源随插件目录）；第三方静态资源只允许放 `assets/vendor/`；内核跨场景共用脚本（前台与后台视图均引用的，如验证码/密码强度校验）放 `assets/front/`，后台资源放 `assets/admin/`；上传文件只允许放 `uploads/`。**后台语言包：中文基线包（`zh_CN.php`）作为所有语言的最终降级方案，只允许放 `core/langs/`（随内核发布，禁止删除）；其余一切语言包（含预装英文包 `en_US.php` 与用户自制包）一律放 `assets/langs/`**。语言包为可执行 PHP（`return array(...)`，文件名 `xx_XX.php`），只允许经 FTP/面板手动放置，**禁止提供后台上传/编辑语言包的入口**；`assets/langs/` 必须配置禁止 HTTP 直接访问的重写规则（三处重写示例一致），包文件头部必须带 `defined('APP_BOOT') or exit;` 守卫。
+3. **目录职责**：内核代码只允许放 `core/`；模板只允许放 `themes/`；**主题自有的静态资源（脚本/样式/图片）必须随主题放在对应主题目录内（`themes/{主题}/`，可建子目录如 `js/`），经 `Theme::assetsUrl()` 引用，禁止放 `assets/`**；插件只允许放 `plugins/`（插件自有资源随插件目录），其中**随站点自建、按站点定制的本地插件放 `plugins/custom/`（该目录已 `.gitignore`，仅保留 `README.md`），随包发布的插件放 `plugins/`**，两处均由同一插件机制发现，同名 slug 以 `plugins/` 为准；第三方静态资源只允许放 `assets/vendor/`；内核跨场景共用脚本（前台与后台视图均引用的，如验证码/密码强度校验）放 `assets/front/`，后台资源放 `assets/admin/`；上传文件只允许放 `uploads/`。**后台语言包：中文基线包（`zh_CN.php`）作为所有语言的最终降级方案，只允许放 `core/langs/`（随内核发布，禁止删除）；其余一切语言包（含预装英文包 `en_US.php` 与用户自制包）一律放 `assets/langs/`**。语言包为可执行 PHP（`return array(...)`，文件名 `xx_XX.php`），只允许经 FTP/面板手动放置，**禁止提供后台上传/编辑语言包的入口**；`assets/langs/` 必须配置禁止 HTTP 直接访问的重写规则（三处重写示例一致），包文件头部必须带 `defined('APP_BOOT') or exit;` 守卫。
 4. **禁止引入框架**（Laravel/ThinkPHP/Symfony 等）与模板引擎库（Twig/Smarty 等），模板使用原生 PHP 语法。
 5. **第三方 JS/CSS 必须本地化**：禁止任何运行时 CDN 引用（含字体、图片、统计脚本）；本地化资源必须连同其字体文件一并放入 `assets/vendor/`，并在 `README.md` 登记名称、版本、来源 URL。
+   - **唯一例外：外链图片（`<img src="https://…">`），且必须同时满足四个条件**：
+     ①默认关闭——`options.img_ext_hosts` 为 `[]` 且无插件/主题声明时，行为与"全部本地化"完全一致；
+     ②主机来源只能是下面两种之一，**内核代码中禁止硬编码任何域名白名单**：
+       (a) 站点管理员在「安全设置 → 外链图片信任」中填写；
+       (b) 插件/主题以**自身设置项的默认值**声明该功能直接依赖的主机（如封面站的 CDN）。
+           此形式必须满足：默认值可见可改、管理员清空后不得回退默认、且不得把与自身功能无关的
+           第三方站点塞进默认值。**禁止在渲染逻辑、数组字面量等处散落域名**；
+     ③只能经 `ExternalMedia::imgTag()` / 模板助手 `ext_img()` 输出，未命中白名单返回空串，调用方必须据此降级（不得回退为直接 `<img>`）；
+     ④CSP 的 `img-src` 由同一份白名单经 `ExternalMedia::cspHeader()` 生成，禁止另写死域名。
+     JS/CSS/字体仍一律本地化，本例外不适用于它们。
 
 ## 3. 安全约束（每一行代码都必须满足）
 
@@ -47,7 +57,7 @@
 8. **频率限制与锁定（等保二级·登录失败处理）**：登录必须实现"同一账号连续失败 5 次锁定 10 分钟"（持久化到 `users.login_fail`/`locked_until`，禁止只用 Session 计数）+ IP 维度限流；注册、验证码发送/校验接口必须实现频率限制（60s 重发间隔、每日上限、错误尝试达上限作废——上限由发送插件经 `plugin_option($plugin,'max_attempts')` 管理，缺省 2、内核钳制 1-5，达到上限立即置 used=1，禁止缺省高于 5）。
 9. **输入校验**：所有 GET/POST 参数必须经统一校验器（`input_int/input_email/input_phone/input_slug/input_enum/input_text`）处理，禁止在业务代码中直接使用 `$_GET`/`$_POST` 原值；SQL 中无法参数绑定的部分（排序、LIMIT、表名）必须走白名单或整型强转。
 10. **错误信息**：`debug=0`（默认）时禁止向页面输出文件路径、SQL 语句、堆栈信息；统一 404/500 错误页。
-11. **安全响应头**：内核必须统一输出 `X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy`；前台文章页输出受限 CSP（仅允许 self 本地化资源）。
+11. **安全响应头**：内核必须统一输出 `X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy`；前台文章页与独立页输出受限 CSP（`img-src` 默认仅 `'self' data:`，仅在 §2.5 例外成立时按可信外链主机白名单放宽，其余指令不得放宽）。
 12. **审计日志完整性**：logs 表**只增不改**——禁止为日志提供任何 UPDATE/DELETE/编辑接口（含 DB 封装层）；仅允许按留存期（默认 180 天、下限 180 天）到期自动清理与管理员导出；日志查询/导出本身必须写一条审计记录。
 13. **客户端 IP 获取**：所有需要客户端 IP 的代码（审计日志、登录锁定、IP 限流、验证码频率限制）必须统一调用 `client_ip()`，禁止直接读取 `$_SERVER['REMOTE_ADDR']`；`client_ip()` 默认只返回 `REMOTE_ADDR`，仅当 `ip_header_enabled=1` 且配置了标头名时才从指定标头取值，且必须：XFF 逗号链取第一个 IP、`filter_var(..., FILTER_VALIDATE_IP)` 校验、非法或为空时回退 `REMOTE_ADDR`。**禁止无条件信任 `X-Forwarded-For` 等可伪造标头**；该功能默认必须关闭（`ip_header_enabled=0`）。
 

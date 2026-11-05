@@ -17,7 +17,7 @@
 | 数据库 | **MySQL 5.7.44+**，统一使用 **PDO (pdo_mysql)** + 预处理语句；禁止使用 mysqli、mysql_*；所有表名必须带可配置前缀。 |
 | 依赖管理 | **禁止使用 PHP Composer** 及任何需要 Composer 加载的库。第三方 JS/CSS 库以本地化静态文件方式引入。 |
 | 伪静态 | 所有浏览器访问路径均为伪静态路径（见 §3）。单一入口 `index.php`；同时提供 `.htaccess`（Apache mod_rewrite）与 `nginx.conf.example`；重写不可用时回退 `index.php?r=...` 形式。 |
-| 资源本地化 | 所有第三方 JS/CSS（Vditor、KaTeX、highlight.js 等）必须下载到 `assets/vendor/`，其附带的字体文件（如 KaTeX fonts）也必须本地化，禁止运行时引用 CDN。 |
+| 资源本地化 | 所有第三方 JS/CSS（Vditor、KaTeX、highlight.js 等）必须下载到 `assets/vendor/`，其附带的字体文件（如 KaTeX fonts）也必须本地化，禁止运行时引用 CDN。**唯一例外为外链图片**：`<img>` 可直连第三方图床，但须满足 ①默认关闭（`options.img_ext_hosts = []` 且无插件/主题声明时与全本地化完全一致）②主机来源只有两种：管理员「安全设置 → 外链图片信任」填写，或插件/主题以**自身设置项的默认值**声明其功能直接依赖的主机（须可见可改、清空不回退；内核代码中仍禁止硬编码域名）③只能经 `ExternalMedia::imgTag()` / `ext_img()` 输出，未命中白名单返回空串 ④CSP `img-src` 由同一白名单生成（`ExternalMedia::cspHeader()`）。详见 §12.11 与 `AGENTS.md` §2.5。 |
 
 ### 0.3 已确认的产品决策
 1. **编辑器**：采用 **Vditor**（Markdown，所见即所得/即时渲染/分屏三模式，原生支持 KaTeX、代码高亮、Mermaid，纯静态 dist 资源，无构建链依赖）。前台渲染用本地化 KaTeX + highlight.js。研判过程与备选（TinyMCE、Editor.md）见 §9。
@@ -77,10 +77,12 @@
 │   ├── smtp-mailer/       ← 预装 SMTP 发信插件（默认禁用）
 │   │   ├── smtp-mailer.php
 │   │   └── README.md
-│   └── aliyun-sms/        ← 预装阿里云短信插件（默认禁用）
-│       ├── aliyun-sms.php
-│       ├── AliyunRpc.php  ← 纯 PHP RPC 签名客户端（约 200 行）
-│       └── README.md      ← 阿里云开通指引
+│   ├── aliyun-sms/        ← 预装阿里云短信插件（默认禁用）
+│   │   ├── aliyun-sms.php
+│   │   ├── AliyunRpc.php  ← 纯 PHP RPC 签名客户端（约 200 行）
+│   │   └── README.md      ← 阿里云开通指引
+│   └── custom/            ← 站点自建/定制插件（.gitignore 忽略，仅保留 README.md）
+│       └── bangumi-wall/  ← 示例：B 站指定 UID 追番封面墙（自定义路由 + 外链图片）
 ├── assets/
 │   ├── vendor/            ← 本地化第三方资源
 │   │   ├── vditor/        ← dist 裁剪版（裁剪清单见 assets/vendor/README.md）
@@ -224,7 +226,7 @@ id / name / slug UNIQUE / description / sort。
    - 重写能力：Apache 下探测 mod_rewrite；Nginx 下展示 `nginx.conf.example` 配置指引。
 2. **数据库配置**：连接地址、端口（默认 3306）、账户名、数据库名、密码、**表前缀**（默认 `cb_`，仅允许字母数字下划线）。提供"测试连接"按钮（PDO 实测并回报错误信息）。
 3. **管理员信息**：用户名、昵称、密码（二次确认；**服务端强制口令复杂度校验，规则同 §6.1**：≥8 位、四类字符至少三类、不得含用户名、不得命中弱口令黑名单）、邮箱、手机号、**后台语言**（`admin_locale`，下拉可选项 = 中文基线 + `assets/langs/` 扫描结果，缺省跟随安装向导界面语言，非法值回退 `zh_CN`）。写入 users 表（role=admin，`password_changed_at` 初始化为当前时间）。
-4. **执行安装**：按 §2 建全部表（带前缀）→ 写入默认 options，其中安全策略默认项：`log_retention_days=180`、`login_max_fail=5`、`login_lock_minutes=10`、`session_timeout_minutes=30`、`pwd_expire_enabled=0`（**密码过期默认关闭**）、`pwd_expire_days=90`、`pwd_history_count=0`（密码历史默认关闭）、`ip_header_enabled=0`（**自定义 IP 标头默认关闭**）、`ip_header_name='X-Forwarded-For'`（CDN 真实 IP 标头名，见 §6.4）、`debug=0`；另有站点名、审核开关默认关、默认模板 default、启用插件空列表 → 生成 `config.php`（DB 配置 + 随机 64 位密钥，用于 CSRF/Session 加固）→ 写 `install/install.lock` → 提示安装完成。
+4. **执行安装**：按 §2 建全部表（带前缀）→ 写入默认 options，其中安全策略默认项：`log_retention_days=180`、`login_max_fail=5`、`login_lock_minutes=10`、`session_timeout_minutes=30`、`pwd_expire_enabled=0`（**密码过期默认关闭**）、`pwd_expire_days=90`、`pwd_history_count=0`（密码历史默认关闭）、`ip_header_enabled=0`（**自定义 IP 标头默认关闭**）、`ip_header_name='X-Forwarded-For'`（CDN 真实 IP 标头名，见 §6.4）、`img_ext_hosts='[]'`（**可信外链图床白名单默认为空，即禁止一切外链图片**，见 §12.11）、`debug=0`；另有站点名、审核开关默认关、默认模板 default、启用插件空列表 → 生成 `config.php`（DB 配置 + 随机 64 位密钥，用于 CSRF/Session 加固）→ 写 `install/install.lock` → 提示安装完成。
 
 ---
 
@@ -315,6 +317,7 @@ id / name / slug UNIQUE / description / sort。
 
 ### 7.1 插件目录规范
 - 每个插件为 `plugins/{slug}/` 目录，主文件 `{slug}.php`。
+- **两个插件根目录**：`plugins/`（随包发布）与 `plugins/custom/`（站点自建/定制，已列入 `.gitignore`，仅保留 `README.md`）。两处由同一 `Plugin::discover()` 发现，同名 slug 以 `plugins/` 为准；`Plugin::locate()` 定位实际目录，加载、卸载、`plugin_url()`、`plugin_lang_pack()` 均跟随实际位置，后台 zip 上传更新既有插件时就地覆盖。
 - 主文件头部注释声明元数据（解析方式同 WP）：
 ```php
 <?php
@@ -347,6 +350,7 @@ id / name / slug UNIQUE / description / sort。
 | `post_deleted` | action | 文章彻底删除后（插件清理随文章的扩展数据） |
 | `admin_menu` | action | 注册后台菜单项/设置页 |
 | `route_parse` / `front_route_{名}` | filter/action | 插件认领自定义路由（OAuth 回调/Webhook） |
+| `front_img_src_hosts` | filter | 外链图片可信主机清单：插件/主题把自己（由管理员配置）的主机追加进内核白名单，内核据此生成 CSP `img-src` 并放行 `ext_img()`；内核不得硬编码域名 |
 | `user_register` | action | 注册前置校验（验证码核验在此接入） |
 | `password_reset` | action | 找回密码前置校验 |
 | `send_verify_code` | filter | 发送验证码：插件返回 true 表示已接管发送 |
@@ -363,6 +367,9 @@ id / name / slug UNIQUE / description / sort。
 
 ### 7.4 插件 API
 `plugin_option($slug,$key,$default)`、`plugin_option_update()`、`plugin_log($action,$detail)`（接统一日志）、`plugin_url($slug,$path)`、设置页渲染辅助函数。
+外链图片：`ExternalMedia::imgTag($url,$opts)` / 模板助手 `ext_img($url,$opts)`（命中可信主机白名单才返回 `<img>`，否则返回空串，调用方必须降级）、`ExternalMedia::sanitizeList()`（主机列表规范化，插件设置页保存时复用）、`ExternalMedia::cspHeader()`。
+
+**插件整页渲染**：统一走 `Theme::renderPluginPage($innerHtml, $ctx)`，由主题声明的 `theme_plugin_page_shell()` 决定骨架（侧边栏位置、内容容器、闭合位置在各主题间并不一致）；主题未声明时降级为 `header`+`#content`+正文+`footer`。**插件不得自行拼接骨架**——早期 `bangumi-wall` 手工拼 `Theme::part('header')`/`'footer'`，在 Argon 主题上丢侧边栏并多闭合容器。`theme_set_context()` + `Theme::loadFunctions()` + `Theme::part()` 仍可用，但仅作为自定义外壳时的底层手段（参见 `themes/README.md` §5.0、`plugins/custom/bangumi-wall`）。
 写入类 API（`plugin_option_update`/`plugin_data_*`/`plugin_user_*`/`plugin_register_table`）受命名空间强制校验：内核按执行上下文（插件加载、钩子回调、设置页回调期间自动识别归属插件）拒绝跨插件写入，违规记 `security` 审计；读取不受限。
 验证码渠道能力声明：`register_verify_provider($channel)`（仅插件加载期可调、强制归属声明者）与 `get_verify_provider($channel)`；内核对验证码能力的探测与策略读取仅认声明，不硬编码插件名。
 
@@ -386,8 +393,8 @@ QQ 新增 `qqlogin/bind` → `front_route_qq_bind`（POST 发起绑定/换绑）
 QQ 登录图标仅链接配置域名下的 `qqlogin/start` → `front_route_qq_start`（GET、禁止缓存、IP 每分钟 10 次）；点击后即时生成 state，外跳前显式保存会话，页面渲染不改写在途授权，发起域名与回调一致。首次签名密钥经命名锁、锁内重读后创建；回调失败审计增加 `state_reason` 分类，禁止记录 state、Cookie、授权码或令牌原文。无需新增表、字段或物理入口，开放平台回调地址保持不变。
 
 ### 7.5 插件管理页（仅管理员）
-列表（名称/版本/作者/描述/状态）、启用、禁用、删除（删除目录，二次确认）、插件设置页入口。插件文件必须位于 `plugins/` 且头部元数据合法才会被发现。
-支持后台上传插件 zip 安装：slug 由包内 `{slug}.php` 主文件推导（头部须含 `Plugin Name`），条目安全白名单与主题上传共用 `core/ZipSafe.php`；同名插件执行覆盖更新（`Plugin Name` 不一致拒绝、旧目录备份+失败回滚），审计记 `plugin.upload`/`plugin.update` 成败两类。
+列表（名称/版本/作者/描述/状态）、启用、禁用、删除（删除目录，二次确认）、插件设置页入口。插件文件必须位于 `plugins/` 或 `plugins/custom/` 且头部元数据合法才会被发现。
+支持后台上传插件 zip 安装：slug 由包内 `{slug}.php` 主文件推导（头部须含 `Plugin Name`），条目安全白名单与主题上传共用 `core/ZipSafe.php`；同名插件执行覆盖更新（`Plugin Name` 不一致拒绝、旧目录备份+失败回滚；既有插件在其当前根目录就地覆盖，新装落 `plugins/`），审计记 `plugin.upload`/`plugin.update` 成败两类。
 不规范卸载安全网：启用列表读取时自动剔除目录已不存在的 slug（写审计）；列表页检测目录已删但仍有残留数据的插件，提供一键清理入口（复用卸载回收逻辑）。
 
 ### 7.6 插件开发文档
@@ -486,7 +493,10 @@ QQ 登录图标仅链接配置域名下的 `qqlogin/start` → `front_route_qq_s
 8. 登录失败锁定 + IP 限流、登录成败审计（见 §6.3）。
 9. 会话超时 30 分钟（可配）、登出销毁、`session_regenerate_id(true)`、cookie `HttpOnly` + HTTPS 下 `Secure`。
 10. 密码过期功能预留默认关闭（见 §6.2）；敏感操作（改密、改邮箱/手机、导出日志）要求重新验证当前密码。
-11. **安全响应头**（内核统一输出）：`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy: strict-origin-when-cross-origin`，前台文章页附带受限 `Content-Security-Policy`（允许 self 的本地化资源）。
+11. **安全响应头**（内核统一输出）：`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy: strict-origin-when-cross-origin`，前台文章页与独立页附带受限 `Content-Security-Policy`（默认允许 self 的本地化资源）。
+11.1 **CSP `img-src` 的唯一放宽通道**：`core/ExternalMedia.php` 统一生成 CSP，`img-src` = `'self' data:` + 可信外链主机白名单（`options.img_ext_hosts` 经过滤器 `front_img_src_hosts` 合并插件/主题声明）。白名单为空时输出与放宽前逐字节一致；`script-src`/`style-src`/`font-src`/`object-src` 等指令**不得**随之外放宽。主机规则仅接受精确域名或 `*.example.com` 一级通配，拒绝 IP 字面量、端口、userinfo 与 `localhost`；单条目上限 32 条。图片标签必须带 `referrerpolicy="no-referrer"`（第三方图床普遍按 Referer 防盗链，本站 `strict-origin-when-cross-origin` 会带 origin 而被 403）。
+
+11.2 **插件/主题声明主机的边界**：插件/主题可把其**功能直接依赖**的主机写成自身设置项的默认值（如 `bangumi-wall` 的 `i0.hdslb.com`），这是让插件开箱可用的必要让步；但必须满足：默认值在设置页可见可改、管理员清空后不得回退默认（`plugin_option()` 的语义天然满足）、不得把与自身功能无关的第三方站点塞进默认值。除此之外**内核与插件代码中仍禁止硬编码域名**——渲染逻辑、数组字面量、多处分支里散落域名一律视为违规（`AGENTS.md` §2.5 ②）。安全设置与本插件设置页两处白名单是**并集**关系，任填一处即生效。
 
 ### 12.3 权限与文件防护
 12. 后台每个动作执行前 `Auth::check_cap()` 鉴权，禁止仅靠菜单隐藏做权限控制；权限唯一判定依据 `users.role`。

@@ -387,13 +387,48 @@ p { margin-bottom: 1.2em; }
 .article-content hr { border: none; border-top: 1px solid var(--border-color); margin: 2em 0; }
 .article-content a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .article-content a:hover { color: var(--accent-dark); }
-/* KaTeX 块级公式横向可滚动（.katex-display 内部 nowrap，必须靠外层滚动） */
-.article-content .tex-block { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; margin: 1.5em 0; }
+/* KaTeX 公式：横向可滚（防超宽撑破版心），但不得出现竖向滚动条。
+ *
+ * 为什么不能只写 overflow-x: auto（2026-10 修复，与 Argon 主题同一问题）：
+ *   1. CSS 规范规定 overflow-x 非 visible 时，overflow-y 会由 visible 计算成 auto；
+ *   2. KaTeX 的分式/求和/积分/连乘用负边距 + vlist 排版，字形墨迹本就天然越出盒子 3~6px
+ *      （正常流里无害，只是画到盒外）；
+ *   3. 于是「宽度根本没超」的公式也满足 scrollHeight > clientHeight，长出竖向滚动条；
+ *   4. 本主题滚动条宽 8px（见文末 ::-webkit-scrollbar），竖向条会吃掉横向空间，
+ *      把原本放得下的公式反过来挤成横向可滚 —— 每行公式右侧那个灰色小竖条就是这么来的。
+ *
+ * 修法：overflow-y: hidden 关掉竖向条，再用等量 padding-block 把越界墨迹"包"进盒子内，
+ * 等量负 margin 抵消多出的高度，行距不变（实测修复前后段落高度逐位相同）。
+ * 0.4em 经实测留有余量：15px（表格内）/17px（正文）/19px（大字号）三档均无竖向溢出。
+ *
+ * 横向 overflow-x: auto 必须保留：去掉它超宽公式会撑破版心、把整页拉出横向滚动条。
+ *
+ * 右侧 0.2em 内距是给根号横线的：KaTeX 的 .sqrt > .root 带 margin-right: -.5556em，
+ * 横线尾端会越出盒子约 2px，导致「完全没超出可用宽度」的根式也出现横向滚动条。
+ * 留 0.2em 把它包进盒子，再用等量负外边距抵消，公式占位宽度不变。
+ */
+.article-content .tex-block {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    margin: 1.5em 0;
+    padding-block: 0.4em;
+    margin-block: calc(1.5em - 0.4em);
+    padding-inline-end: 0.2em;
+    margin-inline-end: -0.2em;
+}
 /* 行内公式超长时容器内横向滚动，而不是溢出屏幕或被拦腰折行 */
 .tex-inline {
     display: inline-block;
     max-width: 100%;
     overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding-block: 0.4em;
+    margin-block: -0.4em;
+    padding-inline-end: 0.2em;
+    margin-inline-end: -0.2em;
     vertical-align: middle;
 }
 

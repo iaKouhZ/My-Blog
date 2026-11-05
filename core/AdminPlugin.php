@@ -73,8 +73,10 @@ class AdminPlugin
             redirect(site_base_admin('plugin/list'));
         }
 
-        $dest = APP_ROOT . '/plugins/' . $slug;
-        $isUpdate = is_dir($dest);
+        // 更新已存在的插件时就地覆盖（含 plugins/custom/ 下的本地插件），新装一律落到内置插件目录
+        $existing = Plugin::locate($slug);
+        $dest = $existing !== '' ? $existing : APP_ROOT . '/plugins/' . $slug;
+        $isUpdate = $existing !== '';
         // 覆盖更新需校验插件身份：Plugin Name 不一致视为不同插件，防止同名异插件被误覆盖
         if ($isUpdate) {
             $oldMeta = Plugin::parseMeta($dest . '/' . $slug . '.php');

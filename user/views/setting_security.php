@@ -82,6 +82,20 @@ $switchText = e(admin_t('admin.common.on')) . '|' . e(admin_t('admin.common.off'
                 </div>
             </div>
             <div class="layui-colla-item">
+                <h3 class="layui-colla-title"><?php echo e(admin_t('admin.security.group_media')); ?></h3>
+                <div class="layui-colla-content layui-show">
+                    <div class="layui-form-item">
+                        <label class="v-label"><?php echo e(admin_t('admin.security.img_hosts')); ?></label>
+                        <textarea name="img_ext_hosts_text" class="layui-textarea" rows="4"
+                                  placeholder="i0.hdslb.com&#10;*.hdslb.com"><?php
+                            echo e(implode("\n", ExternalMedia::configuredHosts()));
+                        ?></textarea>
+                        <div class="form-hint"><?php echo e(admin_t('admin.security.img_hosts_hint')); ?></div>
+                    </div>
+                    <p class="tip"><?php echo e(admin_t('admin.security.img_hosts_warn')); ?></p>
+                </div>
+            </div>
+            <div class="layui-colla-item">
                 <h3 class="layui-colla-title"><?php echo e(admin_t('admin.security.group_debug')); ?></h3>
                 <div class="layui-colla-content layui-show">
                     <div class="layui-form-item">
