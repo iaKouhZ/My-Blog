@@ -93,6 +93,22 @@ $switchText = e(admin_t('admin.common.on')) . '|' . e(admin_t('admin.common.off'
                         <div class="form-hint"><?php echo e(admin_t('admin.security.img_hosts_hint')); ?></div>
                     </div>
                     <p class="tip"><?php echo e(admin_t('admin.security.img_hosts_warn')); ?></p>
+                    <?php foreach ($mediaApproval as $kind => $extensions): ?>
+                    <?php foreach ($extensions as $extensionId => $info): ?>
+                    <?php if (!empty($info['hosts']) || empty($info['valid'])): ?>
+                    <div class="layui-form-item">
+                        <label class="v-label"><?php echo e(admin_t('admin.media.extension_hosts') . ' — ' . $kind . ': ' . $extensionId); ?></label>
+                        <?php if (!empty($info['valid']) && !empty($info['approved'])): ?>
+                        <input type="hidden" name="<?php echo e('img_token_' . $kind . '_' . $extensionId); ?>" value="<?php echo e($info['token']); ?>">
+                        <textarea name="<?php echo e('img_hosts_' . $kind . '_' . $extensionId); ?>" class="layui-textarea" rows="3"><?php echo e(implode("\n", $info['selected'])); ?></textarea>
+                        <div class="form-hint"><?php echo e(admin_t('admin.media.extension_hint')); ?></div>
+                        <?php else: ?>
+                        <p class="tip"><?php echo e(admin_t(empty($info['valid']) ? 'admin.media.invalid' : 'admin.media.extension_pending')); ?></p>
+                        <?php endif; ?>
+                    </div>
+                    <?php endif; ?>
+                    <?php endforeach; ?>
+                    <?php endforeach; ?>
                 </div>
             </div>
             <div class="layui-colla-item">

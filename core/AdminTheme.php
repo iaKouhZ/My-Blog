@@ -10,8 +10,14 @@ class AdminTheme
     public static function listAction()
     {
         Auth::require_cap('manage_themes');
+        $themes = Theme::discover();
+        $mediaApproval = array();
+        foreach ($themes as $dir => $meta) {
+            $mediaApproval[$dir] = ExternalMedia::approvalInfo('theme', $dir);
+        }
         Admin::render(admin_t('admin.menu.theme'), 'theme_list', array(
-            'themes' => Theme::discover(),
+            'themes' => $themes,
+            'mediaApproval' => $mediaApproval,
             'active' => Theme::current(),
             'uploadLimit' => ZipSafe::uploadLimit(),
         ));
@@ -24,7 +30,12 @@ class AdminTheme
         $dir = input_text('dir', '', 64, 'post');
         $themes = Theme::discover();
         if (!preg_match('/^[a-z0-9_-]{1,64}$/', $dir) || !isset($themes[$dir])) {
+            blog_log('template', 'theme.activate', 'fail', array('reason' => 'theme_not_found'));
             flash_set('error', admin_t('admin.theme.not_found'));
+        } elseif (input_int('img_confirm', 0, 'post') !== 1
+            || !ExternalMedia::approve('theme', $dir, input_text('img_token', '', 64, 'post'), input_text('img_hosts_text', '', 12001, 'post'))) {
+            blog_log('template', 'theme.activate', 'fail', array('theme' => $dir, 'reason' => 'media_confirmation_invalid'));
+            flash_set('error', admin_t('admin.media.invalid_or_changed'));
         } else {
             Option::set('active_theme', $dir);
             blog_log('template', 'theme.activate', 'success', array('theme' => $dir));

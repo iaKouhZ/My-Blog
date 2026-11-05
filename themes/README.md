@@ -62,8 +62,8 @@ Description: 主题描述（后台列表展示，截断 40 字）
 | 模板 | 注入变量 |
 |---|---|
 | index / archive / search | `page_type`、`title`、`posts`（数组）、`page`、`totalPages`、`route`、`routeParams`；archive 另有 `subject`（分类路由为分类对象；作者路由为用户行：`id`/`username`/`nickname`/`avatar`/`signature`，作者页建议展示头像/昵称/签名三行居中，不带“作者：”前缀）；search 另有 `kw` |
-| single | `page_type`、`title`、`post`（含 `author` 快照）、`comments`（当前页可见评论）、`commentTotal`、`commentPage`、`commentTotalPages`、`editCommentId` |
-| page | `page_type`、`title`、`post` |
+| single | `page_type`、`title`、`post`（含 `author` 快照和 Markdown 原文 `content`）、`comments`（当前页可见评论）、`commentTotal`、`commentPage`、`commentTotalPages`、`editCommentId` |
+| page | `page_type`、`title`、`post`（含 Markdown 原文 `content`） |
 | login / register / forgot | `page_type`、`title`、`error`，及各自表单回显变量 |
 | 404 | `page_type`、`title` |
 
@@ -125,6 +125,7 @@ Description: 主题描述（后台列表展示，截断 40 字）
 | `gongan_code($text)` | 从公安备案文本提取纯数字编号（拼官方查询链接） |
 | `the_posts()` / `the_post()` / `the_comments()` | 读取上下文数据 |
 | `render_content($markdown)` | 正文渲染（唯一允许的正文输出方式） |
+| `register_theme_markdown_renderer($callback)` | 在主题 `functions.php` 中可选注册正文解析回调；参数、返回值与安全边界见 §5.1 |
 | `paginate($page, $totalPages, $route, $params)` | 分页 HTML |
 | `copyright_line()` | 页脚版权行 |
 | `Theme::assetsUrl($path)` | 主题静态资源 URL |
@@ -161,13 +162,13 @@ Description: 主题描述（后台列表展示，截断 40 字）
 
 ### 4.2 公式、代码高亮与 Callout 渲染约定
 
-`render_content()` 输出的正文中，数学公式为占位容器：行内公式是
+使用内核默认解析器时，`render_content()` 输出的正文中，数学公式为占位容器：行内公式是
 `<span class="tex-inline">原始 TeX</span>`，块级公式是
 `<div class="tex-block">原始 TeX</div>`（单独成行的行内公式会被包在
 `<p>` 里，**不会出现 `tex-block` 套 `tex-inline` 的嵌套**）；围栏代码块为
 `<pre><code class="language-xxx">`。
 
-Markdown 表格一律输出在滚动容器内：
+默认解析器的 Markdown 表格输出在滚动容器内：
 
 ```html
 <div class="table-wrap"><table><thead>…</thead><tbody>…</tbody></table></div>
@@ -219,7 +220,7 @@ article .tex-block { overflow-x: auto; }   /* KaTeX 块级公式内部 nowrap */
 表格单元格内的 `|` 只有在行内代码与 `$...$` 公式之外才是列分隔符，
 所以 `| $\exists M>0,\ |f(x)|\le M$ |` 这样的绝对值竖线可以正常书写。
 
-Obsidian Callout（`> [!note] 标题`）由内核解析为：
+默认解析器把 Obsidian Callout（`> [!note] 标题`）解析为：
 
 ```html
 <div class="callout callout-note">
@@ -249,9 +250,9 @@ Obsidian Callout（`> [!note] 标题`）由内核解析为：
    重复挂载会浪费资源；对已渲染产物再渲染会把公式内容翻倍）；
 2. 主题不得在正文外再包一层 `.tex-block` / `.tex-inline` 容器，
    也不得对 `render_content()` 的输出做正则改写；
-3. 代码、公式与 Callout 由内核按层级解析，代码内 `$` 不会触发公式；嵌套上限 64，超出部分转义显示。
-4. 主题不得自行解析或改写 Callout（`.callout` 的生成与类型白名单由内核负责，
-   改写会绕过类型校验；后台 Vditor 预览仍显示普通引用属已知差异，**前台渲染为准**）。
+3. 默认解析器按层级解析代码、公式与 Callout，代码内 `$` 不会触发公式；嵌套上限 64，超出部分转义显示。
+4. 使用默认解析器时，主题不得再改写 Callout（`.callout` 的生成与类型白名单由内核负责，
+   改写会绕过类型校验；后台 Vditor 预览仍显示普通引用属已知差异，**前台渲染为准**）。自定义解析器须自行定义语法及类型约束，并接受 §5.1 的输出过滤。
 
 ### 4.3 主题多语言（i18n）
 
@@ -308,17 +309,15 @@ add_filter('post_content', 'my_theme_content');
 可用钩子清单与语义见 `plugins/README.md` §3（主题与插件共享同一套 Hook 机制，
 常用：`front_head`、`front_footer`、`post_content`）。
 
-主题若需要放宽外链图片来源，唯一方式是返回管理员配置过的主机清单，
-**禁止在主题代码里硬编码域名**：
+主题需展示外链图片时，可在主题根目录创建 `external-media.json`，声明功能直接依赖的主机作为主题自身设置的默认候选值：
 
-```php
-add_filter('front_img_src_hosts', function ($hosts) {
-    // 主题设置里由管理员填写（一行为一个主机），此处只做透传与规范化
-    return array_merge((array) $hosts, ExternalMedia::sanitizeList(
-        preg_split('/[\r\n,;]+/', (string) theme_setting('img_hosts', ''))
-    ));
-});
+```json
+{"img_hosts": ["cdn.example.com", "*.images.example.com"]}
 ```
+
+内核仅读取静态声明，切换主题前的确认框展示声明与将授权的子集；确认绑定当时的静态声明与授权快照，扩展自行修改设置不能扩大已确认范围。管理员确认后，该主题的授权子集与站点级设置及启用插件授权取并集；管理员仍可单独在站点级白名单添加主机。管理员可在「安全设置 → 外链图片信任」修改或清空当前主题的授权子集，清空后不回退默认；填写范围不能超出声明。主题切换后原主题授权不再生效；清单变更后，当前主题也可在主题列表重新确认。主机最多 32 条，必须是精确域名或 `*.example.com` 形式的主机字面量，拒绝 URL、IP、端口、路径、userinfo 和 localhost；清单无效时不能启用主题。不声明文件时视为空声明。主题模板仍须用 `ext_img()` 输出外链图片并处理空串，禁止渲染逻辑散落域名。
+
+**旧主题迁移**：`front_img_src_hosts` 动态过滤器不再参与可信主机计算。依赖它的旧主题须添加静态声明并在主题列表确认，或由管理员显式加入站点级白名单；在完成授权前图片可能无法显示。已保存的站点级主机设置继续生效。
 
 `Theme::loadFunctions()` 也会在插件整页渲染自定义路由时被显式调用，
 因此这里挂的钩子不会因"非主题路由"而失效。
@@ -358,6 +357,23 @@ function theme_plugin_page_shell($innerHtml)
 
 ### 5.1 主题应触发的插件注入点
 
+正文模板仍须调用 `render_content($post['content'])`；它会先选择解析器并执行服务端白名单过滤，随后执行既有 `post_content` 过滤器。主题可在 `functions.php` 可选注册解析器：
+
+```php
+// 示例只委托现有解析器；实际主题可替换为自己的 Markdown 到 HTML 转换。
+function my_theme_markdown($markdown)
+{
+    return Markdown::render($markdown);
+}
+register_theme_markdown_renderer('my_theme_markdown');
+```
+
+注册成功返回 `true`；回调不可调用时返回 `false` 且不覆盖已有注册，多次有效注册以最后一次为准。回调接收一个 Markdown 原文字符串，须返回 HTML 字符串；空字符串是有效结果。未注册、返回非字符串或抛出 `Throwable` 时回退内核默认解析器。老主题无需注册，普通正文排版及钩子顺序保持兼容；默认解析器的外链图片现在也执行白名单，未授权图片会降级为 `alt` 文本，须按外链迁移说明检查。正文仍是 Markdown 原文，主题自有语法在其他主题下可能降级显示。回调不负责直接输出 HTML，也不应递归调用 `render_content()`；内核有重入守卫，重入时使用默认解析器。需要调用默认解析器时使用 `Markdown::render()`。
+
+默认及自定义解析器返回的 HTML 均经内核 DOM 白名单处理，危险标签和不支持的属性会被移除，不能假设任意标签、事件属性、内联样式或脚本都能保留；所需交互脚本和样式须本地化并遵守现有 CSP。相对路径图片可保留；外链图片仅允许可信主机的 HTTPS 地址，并由内核经 `ExternalMedia::imgTag()` 处理，未获信任或使用其他协议的图片降级为纯文本 `alt`（无 `alt` 则移除）。`post_content` 为兼容现有插件仍在过滤后执行，其返回值不会再次由内核过滤；钩子提供者必须自行确保安全输出并遵守外链图片规则。调用或绕过解析接口的主题 PHP 本身属于可信代码，不因该过滤而成为沙箱。
+
+文章/独立页的 CSP 根据站点设置和经确认的启用扩展静态声明生成；主题设置、语法和前端资源需要兼容受限 CSP。解析器接管后，默认解析器的 Callout、表格与公式约定以及 `markdown_callout_types` 钩子不会自动适用。
+
 注入点名称和参数保持不变。`comments_before/after` 包围当前页评论及分页导航，不代表一次渲染全部评论；读取总数请用 cb_ctx()['commentTotal']。
 文章正文与评论可见性由控制器/查询服务处理，主题注入点不得自行补查其它用户的待审核评论。
 
@@ -386,7 +402,7 @@ function theme_plugin_page_shell($innerHtml)
 
 ## 6. 启用、上传、删除与主题设置
 
-- **启用**：后台「模板管理 → 启用」，写入 `options.active_theme`。
+- **启用**：后台「模板管理 → 启用」需确认目标主题的外链图片声明及将授权的主机（空声明也需确认），再写入 `options.active_theme`。已启用主题的声明发生变化后可在列表重新确认。
 - **主题设置**：设置页由主题自带的 `settings.php` 清单驱动（可选文件，
   不提供则列表页不展示「设置」按钮）：
 
@@ -436,7 +452,7 @@ function theme_plugin_page_shell($innerHtml)
 2. 模板内禁止直接操作 `DB`/`$_GET`/`$_POST`——数据一律来自注入的上下文或模板 API。
 3. 禁止任何运行时 CDN 引用（含字体、图片）；第三方资源本地化到 `assets/vendor/`。
    **唯一例外是外链图片**：主题需要展示第三方图床/视频站封面时，主机必须由管理员
-   在「安全设置 → 外链图片信任」中声明（主题自身不得硬编码域名），输出统一走
+   在「安全设置 → 外链图片信任」中声明，或由主题声明其功能直接依赖的主机并经管理员确认（见 §5），输出统一走
    `ext_img($url, $opts)`——未命中白名单时它返回**空串**，主题必须降级（占位块或纯文字），
    禁止回退成手写 `<img src>`。详见 `plugins/README.md` §7.1。
 4. 前台文章页与独立页受受限 CSP 约束（默认仅 `'self'` 本地资源），内联脚本/外部 CDN 会被浏览器拦截；

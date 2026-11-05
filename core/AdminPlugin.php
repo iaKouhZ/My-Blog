@@ -10,8 +10,14 @@ class AdminPlugin
     public static function listAction()
     {
         Auth::require_cap('manage_plugins');
+        $plugins = Plugin::discover();
+        $mediaApproval = array();
+        foreach ($plugins as $slug => $meta) {
+            $mediaApproval[$slug] = ExternalMedia::approvalInfo('plugin', $slug);
+        }
         Admin::render(admin_t('admin.menu.plugin'), 'plugin_list', array(
-            'plugins' => Plugin::discover(),
+            'plugins' => $plugins,
+            'mediaApproval' => $mediaApproval,
             'actives' => Plugin::activeList(),
             'orphans' => self::orphanSlugs(),
             'uploadLimit' => ZipSafe::uploadLimit(),
@@ -159,9 +165,17 @@ class AdminPlugin
     {
         Auth::require_cap('manage_plugins');
         $slug = self::slugInput('post');
-        if ($slug === '' || !Plugin::activate($slug)) {
+        $confirmed = input_int('img_confirm', 0, 'post') === 1;
+        $token = input_text('img_token', '', 64, 'post');
+        $hosts = input_text('img_hosts_text', '', 12001, 'post');
+        if ($slug === '' || !$confirmed || !ExternalMedia::approve('plugin', $slug, $token, $hosts)) {
+            blog_log('plugin', 'plugin.activate', 'fail', array('slug' => $slug, 'reason' => 'media_confirmation_invalid'));
+            flash_set('error', admin_t('admin.media.invalid_or_changed'));
+        } elseif (!Plugin::isActive($slug) && !Plugin::activate($slug)) {
+            blog_log('plugin', 'plugin.activate', 'fail', array('slug' => $slug, 'reason' => 'activate_failed'));
             flash_set('error', admin_t('admin.plugin.activate_failed'));
         } else {
+            blog_log('plugin', 'plugin.media_approval', 'success', array('slug' => $slug));
             flash_set('success', admin_t('admin.plugin.activated'));
         }
         redirect(site_base_admin('plugin/list'));

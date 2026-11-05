@@ -38,7 +38,7 @@ class Markdown
         $this->mathPrefix = '@@CBMATH' . bin2hex(random_bytes(8)) . '_';
         // 引用前缀必须先由所属块剥离，代码与公式随后在同一层级识别。
         // 最终过滤放在所有占位还原之后，保证 HTML 安全边界只有一个出口。
-        return self::sanitize($this->restoreMath($this->parseBlocks($text)));
+        return self::sanitize($this->restoreMath($this->parseBlocks($text)), true);
     }
 
     /** 行内公式暂存 */
@@ -547,9 +547,10 @@ class Markdown
      * DOMDocument 白名单过滤：剔除危险标签，剥离非法属性
      *
      * @param string $html 待过滤 HTML
+     * @param bool $restrictImages 是否对解析结果中的图片执行外链策略
      * @return string
      */
-    public static function sanitize($html)
+    public static function sanitize($html, $restrictImages = false)
     {
         if (trim($html) === '') {
             return '';
@@ -583,7 +584,7 @@ class Markdown
         if ($root === null) {
             return '';
         }
-        self::cleanNode($root, $allowed, $allowedAttrs);
+        self::cleanNode($root, $allowed, $allowedAttrs, $restrictImages);
 
         $out = '';
         foreach ($root->childNodes as $child) {
@@ -595,7 +596,7 @@ class Markdown
     /**
      * 递归清理节点：危险标签整体移除，未知标签解包保留文本，属性白名单过滤
      */
-    private static function cleanNode($node, array $allowed, array $allowedAttrs)
+    private static function cleanNode($node, array $allowed, array $allowedAttrs, $restrictImages)
     {
         $dangerous = array('script', 'style', 'iframe', 'object', 'embed', 'form',
             'input', 'button', 'textarea', 'select', 'link', 'meta', 'base', 'video', 'audio');
@@ -613,7 +614,7 @@ class Markdown
                 }
                 if (!in_array($tag, $allowed, true)) {
                     // 未知标签：先处理其后代，再解包为文本/子节点
-                    self::cleanNode($child, $allowed, $allowedAttrs);
+                    self::cleanNode($child, $allowed, $allowedAttrs, $restrictImages);
                     while ($child->firstChild) {
                         $node->insertBefore($child->firstChild, $child);
                     }
@@ -640,11 +641,63 @@ class Markdown
                         }
                     }
                 }
-                self::cleanNode($child, $allowed, $allowedAttrs);
+                if ($restrictImages && $tag === 'img') {
+                    self::cleanThemeImage($node, $child);
+                    continue;
+                }
+                self::cleanNode($child, $allowed, $allowedAttrs, $restrictImages);
             } elseif ($child->nodeType === XML_PI_NODE || $child->nodeType === XML_COMMENT_NODE) {
                 $node->removeChild($child);
             }
         }
+    }
+
+    /** 主题解析结果中的外链图片统一经可信主机策略输出。 */
+    private static function cleanThemeImage($parent, $image)
+    {
+        $src = $image->getAttribute('src');
+        if ($src === '') {
+            self::replaceImageWithAlt($parent, $image);
+            return;
+        }
+
+        // 浏览器可把反斜杠视作斜杠；解码和移除空白后再分类，防止伪装成本地路径。
+        $probe = $src;
+        for ($i = 0; $i < 4; $i++) {
+            $decoded = rawurldecode($probe);
+            if ($decoded === $probe) {
+                break;
+            }
+            $probe = $decoded;
+        }
+        $probe = str_replace('\\', '/', preg_replace('/[\x00-\x20\x7f]+/', '', $probe));
+        if (substr($probe, 0, 2) !== '//' && !preg_match('/^[a-z][a-z0-9+.-]*:/i', $probe)) {
+            return;
+        }
+
+        $tag = ExternalMedia::imgTag($src, array('alt' => $image->getAttribute('alt')));
+        if ($tag === '') {
+            self::replaceImageWithAlt($parent, $image);
+            return;
+        }
+        // 使用策略生成的完整标签，保留其 no-referrer 等安全属性。
+        $fragment = $image->ownerDocument->createDocumentFragment();
+        if (!$fragment->appendXML(substr($tag, 0, -1) . '/>')) {
+            self::replaceImageWithAlt($parent, $image);
+            return;
+        }
+        $parent->replaceChild($fragment, $image);
+    }
+
+    /** 无法安全输出的图片降级为纯文本说明。 */
+    private static function replaceImageWithAlt($parent, $image)
+    {
+        $alt = $image->getAttribute('alt');
+        if ($alt === '') {
+            $parent->removeChild($image);
+            return;
+        }
+        $parent->replaceChild($image->ownerDocument->createTextNode($alt), $image);
     }
 
     /**

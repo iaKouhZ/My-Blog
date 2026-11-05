@@ -341,8 +341,8 @@ id / name / slug UNIQUE / description / sort。
 | `init` | action | 内核引导完成 |
 | `front_head` / `front_footer` | action | 前台页头/页尾输出点 |
 | `admin_head` / `admin_footer` | action | 后台页头/页尾输出点 |
-| `post_content` | filter | 文章正文渲染后输出前 |
-| `markdown_callout_types` | filter | 正文 Callout 类型表（规范类型 => 别名/语言键/中文缺省标题），插件可注册自定义类型，非法标识符由内核丢弃 |
+| `post_content` | filter | 正文解析及白名单过滤后、输出前；兼容既有钩子顺序，过滤器产物不再由内核二次过滤，回调须自行保证输出安全 |
+| `markdown_callout_types` | filter | 内核默认解析器的 Callout 类型表（规范类型 => 别名/语言键/中文缺省标题），插件可注册自定义类型，非法标识符由内核丢弃；主题自定义解析器是否应用此钩子由其决定 |
 | `front_posts` | filter | 首页/归档/搜索列表当前页文章（排序/修饰；分页已定，不宜移除） |
 | `comment_before_save` | filter | 评论入库前（可拦截/改写） |
 | `comment_write_allowed` | filter | 前台评论增/改/删统一拦截点（返回 false 拒绝，记审计；后台不受影响） |
@@ -350,7 +350,6 @@ id / name / slug UNIQUE / description / sort。
 | `post_deleted` | action | 文章彻底删除后（插件清理随文章的扩展数据） |
 | `admin_menu` | action | 注册后台菜单项/设置页 |
 | `route_parse` / `front_route_{名}` | filter/action | 插件认领自定义路由（OAuth 回调/Webhook） |
-| `front_img_src_hosts` | filter | 外链图片可信主机清单：插件/主题把自己（由管理员配置）的主机追加进内核白名单，内核据此生成 CSP `img-src` 并放行 `ext_img()`；内核不得硬编码域名 |
 | `user_register` | action | 注册前置校验（验证码核验在此接入） |
 | `password_reset` | action | 找回密码前置校验 |
 | `send_verify_code` | filter | 发送验证码：插件返回 true 表示已接管发送 |
@@ -368,6 +367,8 @@ id / name / slug UNIQUE / description / sort。
 ### 7.4 插件 API
 `plugin_option($slug,$key,$default)`、`plugin_option_update()`、`plugin_log($action,$detail)`（接统一日志）、`plugin_url($slug,$path)`、设置页渲染辅助函数。
 外链图片：`ExternalMedia::imgTag($url,$opts)` / 模板助手 `ext_img($url,$opts)`（命中可信主机白名单才返回 `<img>`，否则返回空串，调用方必须降级）、`ExternalMedia::sanitizeList()`（主机列表规范化，插件设置页保存时复用）、`ExternalMedia::cspHeader()`。
+插件/主题可在自身根目录用 `external-media.json` 声明 `img_hosts`，作为扩展设置的候选默认值；管理员启用插件或切换主题前确认声明及授权子集，已确认子集可在安全设置修改或清空。清单变化须重新确认，禁用或切换后不再生效；旧 `front_img_src_hosts` 过滤器不再参与白名单计算。详见 `plugins/README.md` §7.1。
+主题可选正文解析接口：`register_theme_markdown_renderer($callback)`，由当前主题在 `functions.php` 注册接收 Markdown 字符串并返回 HTML 字符串的回调；未注册、返回非字符串或抛出异常时回退内核解析器，空字符串为有效结果。主题解析结果经内核白名单和外链图片检查后再传给 `post_content`；详见 `themes/README.md` §5.1。
 
 **插件整页渲染**：统一走 `Theme::renderPluginPage($innerHtml, $ctx)`，由主题声明的 `theme_plugin_page_shell()` 决定骨架（侧边栏位置、内容容器、闭合位置在各主题间并不一致）；主题未声明时降级为 `header`+`#content`+正文+`footer`。**插件不得自行拼接骨架**——早期 `bangumi-wall` 手工拼 `Theme::part('header')`/`'footer'`，在 Argon 主题上丢侧边栏并多闭合容器。`theme_set_context()` + `Theme::loadFunctions()` + `Theme::part()` 仍可用，但仅作为自定义外壳时的底层手段（参见 `themes/README.md` §5.0、`plugins/custom/bangumi-wall`）。
 写入类 API（`plugin_option_update`/`plugin_data_*`/`plugin_user_*`/`plugin_register_table`）受命名空间强制校验：内核按执行上下文（插件加载、钩子回调、设置页回调期间自动识别归属插件）拒绝跨插件写入，违规记 `security` 审计；读取不受限。
@@ -437,9 +438,9 @@ QQ 登录图标仅链接配置域名下的 `qqlogin/start` → `front_route_qq_s
 实施要点：
 - `assets/vendor/vditor/` 本地化 dist 裁剪版（保留运行必需的 lute/katex/highlight.js/icons/i18n 与字体/图标资源；已移除 dev/类型文件、mathjax 与未使用的图表语法懒加载库，清单见 assets/vendor/README.md）。
 - 后台文章编辑页集成 Vditor（Markdown 模式），数据库存 Markdown 原文。
-- 前台渲染：`core/Markdown.php` 将 Markdown 转 HTML（自研轻量解析或纯 PHP 单文件解析库），随后用**基于 DOMDocument 的标签/属性白名单**做服务端 XSS 过滤；KaTeX 与 highlight.js 本地化渲染公式与代码块（`$...$`、`$$...$$`、围栏代码块）。
-- 正文另支持 Obsidian Callout 语法 `> [!type] 标题`：内核在块级解析中识别、剥离引用前缀后递归解析正文（支持内部列表/表格/代码块/公式与嵌套 Callout），输出 `div.callout > div.callout-title + div.callout-content`；类型经白名单映射（13 种类型 + Obsidian 别名，未注册降级 `note`），可经 `markdown_callout_types` 过滤器扩展。解析先识别块结构并逐层剥离引用前缀，同层代码围栏优先于公式，避免代码内美元符号被误解析；公式还原后再做最终白名单过滤；嵌套深度上限 64，超出部分转义显示。
-- Markdown 表格输出 `div.table-wrap > table`（外层滚动容器，供主题在窄屏做横向滚动）。切分单元格前先按行内解析同样的规则把行内代码与 `$...$` 公式换成不含 `|` 的随机前缀占位符，切分后还原：`|x-a|`、`\left|…\right|` 这类竖线属于 TeX 语法，不再被当成列分隔符（否则单元格被拆开、公式只剩半个 `$` 对而无法渲染）。两处规则必须一致，否则会出现"切分视为文本、渲染视为公式"的错位。`\|` 转义竖线仍不受支持（与既有行为一致）。
+- 前台默认渲染：`core/Markdown.php` 将 Markdown 转 HTML，并用**基于 DOMDocument 的标签/属性白名单**做服务端 XSS 过滤；主题可选注册自定义解析回调，未注册时沿用默认解析器。默认与自定义解析器均执行外链图片检查，未授权图片降级为 `alt` 文字。KaTeX 与 highlight.js 本地化渲染公式与代码块（`$...$`、`$$...$$`、围栏代码块）。
+- 默认解析器另支持 Obsidian Callout 语法 `> [!type] 标题`：内核在块级解析中识别、剥离引用前缀后递归解析正文（支持内部列表/表格/代码块/公式与嵌套 Callout），输出 `div.callout > div.callout-title + div.callout-content`；类型经白名单映射（13 种类型 + Obsidian 别名，未注册降级 `note`），可经 `markdown_callout_types` 过滤器扩展。解析先识别块结构并逐层剥离引用前缀，同层代码围栏优先于公式，避免代码内美元符号被误解析；公式还原后再做最终白名单过滤；嵌套深度上限 64，超出部分转义显示。
+- 默认解析器的 Markdown 表格输出 `div.table-wrap > table`（外层滚动容器，供主题在窄屏做横向滚动）。切分单元格前先按行内解析同样的规则把行内代码与 `$...$` 公式换成不含 `|` 的随机前缀占位符，切分后还原：`|x-a|`、`\left|…\right|` 这类竖线属于 TeX 语法，不再被当成列分隔符（否则单元格被拆开、公式只剩半个 `$` 对而无法渲染）。两处规则必须一致，否则会出现"切分视为文本、渲染视为公式"的错位。`\|` 转义竖线仍不受支持（与既有行为一致）。
 
 ---
 
@@ -470,6 +471,7 @@ QQ 登录图标仅链接配置域名下的 `qqlogin/start` → `front_route_qq_s
   - post/comment：发布、修改、删除、审核；
   - setting/template/plugin：站点设置变更、模板与插件的启用/禁用/安装/删除；
   - verify：验证码发送与核验（由 SMTP/短信插件接入）。
+- **扩展授权批量保存**：每项独立提交后立即写 `security/setting.media_hosts/success`，记录扩展与变更前后主机；后续失败记录已生效项并提示部分保存，避免成功变更因批量请求失败而漏审计。
 - **审计记录保护（只增不改）**：Logger 与 DB 封装不提供 logs 表的 UPDATE/DELETE 接口；后台无编辑/删除单条日志功能；仅支持到期自动归档清理（按 `log_retention_days`，默认 180 天，下限 180）与管理员导出归档。
 - **日志中心**（仅管理员）：按用户/类别/动作/结果/日期/IP 组合筛选、分页、CSV 导出；查询与导出行为本身写入 `category=security` 审计记录。CSV 导出对全部字段做公式注入中和（`csv_safe()`：以 `=` `+` `-` `@` 或 TAB/CR 开头的值前置单引号），防止 UA/详情等攻击者可控内容在 Excel/WPS 中被当作公式执行。
 - **脱敏红线**：日志与报错中禁止出现明文密码、明文验证码、AccessKeySecret、SMTP 授权码；邮箱/手机号在 detail 中默认脱敏（如 `138****1234`、`a***@x.com`）；唯一例外是 detail 中键名为 `content` 的业务正文快照（如评论发布/修改审计），为满足取证一致性保留原文。
@@ -494,9 +496,11 @@ QQ 登录图标仅链接配置域名下的 `qqlogin/start` → `front_route_qq_s
 9. 会话超时 30 分钟（可配）、登出销毁、`session_regenerate_id(true)`、cookie `HttpOnly` + HTTPS 下 `Secure`。
 10. 密码过期功能预留默认关闭（见 §6.2）；敏感操作（改密、改邮箱/手机、导出日志）要求重新验证当前密码。
 11. **安全响应头**（内核统一输出）：`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy: strict-origin-when-cross-origin`，前台文章页与独立页附带受限 `Content-Security-Policy`（默认允许 self 的本地化资源）。
-11.1 **CSP `img-src` 的唯一放宽通道**：`core/ExternalMedia.php` 统一生成 CSP，`img-src` = `'self' data:` + 可信外链主机白名单（`options.img_ext_hosts` 经过滤器 `front_img_src_hosts` 合并插件/主题声明）。白名单为空时输出与放宽前逐字节一致；`script-src`/`style-src`/`font-src`/`object-src` 等指令**不得**随之外放宽。主机规则仅接受精确域名或 `*.example.com` 一级通配，拒绝 IP 字面量、端口、userinfo 与 `localhost`；单条目上限 32 条。图片标签必须带 `referrerpolicy="no-referrer"`（第三方图床普遍按 Referer 防盗链，本站 `strict-origin-when-cross-origin` 会带 origin 而被 403）。
+11.1 **CSP `img-src` 的唯一放宽通道**：`core/ExternalMedia.php` 统一生成 CSP，`img-src` = `'self' data:` + 可信外链主机白名单（站点级 `options.img_ext_hosts` 与启用插件/当前主题经管理员确认的静态声明授权子集并集）。白名单为空时输出与放宽前逐字节一致；`script-src`/`style-src`/`font-src`/`object-src` 等指令**不得**随之外放宽。主机规则仅接受精确域名或 `*.example.com` 一级通配，拒绝 IP 字面量、端口、userinfo 与 `localhost`；单条目上限 32 条。图片标签必须带 `referrerpolicy="no-referrer"`（第三方图床普遍按 Referer 防盗链，本站 `strict-origin-when-cross-origin` 会带 origin 而被 403）。
 
-11.2 **插件/主题声明主机的边界**：插件/主题可把其**功能直接依赖**的主机写成自身设置项的默认值（如 `bangumi-wall` 的 `i0.hdslb.com`），这是让插件开箱可用的必要让步；但必须满足：默认值在设置页可见可改、管理员清空后不得回退默认（`plugin_option()` 的语义天然满足）、不得把与自身功能无关的第三方站点塞进默认值。除此之外**内核与插件代码中仍禁止硬编码域名**——渲染逻辑、数组字面量、多处分支里散落域名一律视为违规（`AGENTS.md` §2.5 ②）。安全设置与本插件设置页两处白名单是**并集**关系，任填一处即生效。
+11.2 **插件/主题声明主机的边界**：插件/主题可通过自身 `external-media.json` 声明**功能直接依赖**的主机作为扩展设置项的默认候选值。管理员确认启用时可见声明及授权子集，确认后在安全设置可修改或清空子集，清空后不得回退默认，不得声明无关站点。内核绑定确认与清单摘要，清单变化须重新确认；停用插件或切换主题后该扩展不参与白名单。旧动态 `front_img_src_hosts` 不再生效，旧扩展需迁移静态声明并重新确认，或由管理员在站点级设置显式授权。除此之外**内核与插件代码中仍禁止硬编码域名**——渲染逻辑、数组字面量、多处分支里散落域名一律视为违规（`AGENTS.md` §2.5 ②）。站点级设置和各已确认启用扩展的授权子集是**并集**关系。
+
+外链图片 URL 进入可信主机匹配前必须拒绝反斜杠、原始空白/控制字符及非法主机，避免 PHP 与浏览器的主机解析差异绕过通配白名单。
 
 ### 12.3 权限与文件防护
 12. 后台每个动作执行前 `Auth::check_cap()` 鉴权，禁止仅靠菜单隐藏做权限控制；权限唯一判定依据 `users.role`。

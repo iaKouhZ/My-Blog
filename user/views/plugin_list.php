@@ -41,6 +41,7 @@ defined('APP_BOOT') or exit;
         <?php endif; ?>
         <?php foreach ($plugins as $slug => $meta): ?>
         <?php $active = in_array($slug, $actives, true); ?>
+        <?php $hostInfo = $mediaApproval[$slug]; ?>
         <tr>
             <td><?php echo e($meta['name']); ?><br><small><?php echo e($slug); ?></small></td>
             <td><?php echo e($meta['description']); ?></td>
@@ -55,13 +56,24 @@ defined('APP_BOOT') or exit;
                     <input type="hidden" name="slug" value="<?php echo e($slug); ?>">
                     <button class="layui-btn layui-btn-xs layui-btn-primary"><?php echo e(admin_t('admin.common.disabled')); ?></button>
                 </form>
-                <?php else: ?>
-                <form method="post" action="<?php echo e(site_base_admin('plugin/activate')); ?>">
+                <?php endif; ?>
+                <?php if (!$active || !$hostInfo['approved']): ?>
+                <?php
+                $declared = empty($hostInfo['hosts']) ? admin_t('admin.media.none') : implode(', ', $hostInfo['hosts']);
+                $selected = empty($hostInfo['selected']) ? admin_t('admin.media.none') : implode(', ', $hostInfo['selected']);
+                $message = admin_t('admin.media.plugin_confirm', array($meta['name'], $declared, $selected));
+                ?>
+                <form method="post" action="<?php echo e(site_base_admin('plugin/activate')); ?>"
+                      data-confirm="<?php echo e($message); ?>">
                     <?php echo Csrf::field(); ?>
                     <input type="hidden" name="slug" value="<?php echo e($slug); ?>">
-                    <button class="layui-btn layui-btn-xs layui-btn-normal"><?php echo e(admin_t('admin.common.enabled')); ?></button>
+                    <input type="hidden" name="img_confirm" value="">
+                    <input type="hidden" name="img_token" value="<?php echo e($hostInfo['token']); ?>">
+                    <input type="hidden" name="img_hosts_text" value="<?php echo e(implode(',', $hostInfo['selected'])); ?>">
+                    <button class="layui-btn layui-btn-xs layui-btn-normal" <?php echo empty($hostInfo['valid']) ? 'disabled' : ''; ?>><?php echo e(admin_t($active ? 'admin.media.reconfirm' : 'admin.common.enabled')); ?></button>
                 </form>
                 <?php endif; ?>
+                <?php if (empty($hostInfo['valid'])): ?><span class="tip"><?php echo e(admin_t('admin.media.invalid')); ?></span><?php endif; ?>
                 <form method="post" action="<?php echo e(site_base_admin('plugin/uninstall')); ?>"
                       data-confirm="<?php echo e(admin_t('admin.plugin.delete_confirm')); ?>">
                     <?php echo Csrf::field(); ?>
