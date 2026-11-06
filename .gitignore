@@ -21,3 +21,5 @@ uploads/*
 # 仅保留说明文件，便于新环境拉起后仍有该目录与约定说明
 /plugins/custom/*
 !/plugins/custom/README.md
+# 本地自定义主题目录
+/themes/custom/*
