@@ -80,8 +80,8 @@ defined('APP_BOOT') or exit;
 | `front_footer` | action | 无 | 前台页尾输出点 |
 | `admin_head` | action | 无 | 后台 `</head>` 前输出点（插件后台样式/脚本） |
 | `admin_footer` | action | 无 | 后台 `</body>` 前输出点 |
-| `post_content` | filter | `$html` | 文章正文渲染后、输出前（可追加处理） |
-| `markdown_callout_types` | filter | `$types` | 正文 Callout 类型表：`规范类型 => array(别名数组, 语言键, 中文缺省标题)`，插件可新增类型（`[!别名]` 与 `[!类型]` 均可用，类型名/别名须匹配 `^[a-z][a-z0-9-]*$`，内核会丢弃非法项）；未注册类型降级为 `note` |
+| `post_content` | filter | `$html` | 正文解析及白名单过滤之后执行，兼容既有插件；钩子返回值不会再次由内核过滤，插件须负责其追加内容的转义和外链图片规则 |
+| `markdown_callout_types` | filter | `$types` | 内核默认解析器的 Callout 类型表：`规范类型 => array(别名数组, 语言键, 中文缺省标题)`，插件可新增类型（`[!别名]` 与 `[!类型]` 均可用，类型名/别名须匹配 `^[a-z][a-z0-9-]*$`，内核会丢弃非法项）；未注册类型降级为 `note`。主题接管解析时，该钩子是否生效取决于主题解析器 |
 | `front_posts` | filter | `$posts, $context` | 首页/归档/搜索列表当前页文章数组，可排序/修饰（`$context` 为 home/category/author/search；分页已在此之前确定，不宜移除条目） |
 | `comment_before_save` | filter | `$data` | 评论入库前，可改写或拦截 |
 | `comment_write_allowed` | filter | `$allowed, $action, $postId, $commentId` | 前台评论写入统一拦截点（内核触发）；`$action` 为 create/update/delete（create 时 `$commentId=0`），返回 `false` 拒绝并记审计日志；后台评论管理不受影响 |
@@ -99,7 +99,6 @@ defined('APP_BOOT') or exit;
 | `password_blacklist` | filter | `$list` | 扩展弱口令黑名单 |
 | `route_parse` | filter | `$route, $path` | 未知路径落入 404 前认领自定义路由 |
 | `front_route_{路由名}` | action | `$params` | 接管经 `route_parse` 认领的路由 |
-| `front_img_src_hosts` | filter | `$hosts` | 追加本插件的可信外链图床主机，内核据此放宽 CSP `img-src` 并放行 `ext_img()`。域名须来自管理员配置或本插件设置项默认值（见 §7.1），**禁止在渲染逻辑中散落域名** |
 | `auth_form_footer` | action | `$page` | 认证表单下方注入点（主题触发；`$page` 为 `login`/`register`/`forgot`，回调应按参数区分页面） |
 | `post_card_before` / `post_card_after` | action | `$post, $context` | 列表页文章卡片前/后注入点（主题触发，适合加徽标/推荐位等） |
 | `single_content_after` | action | `$post` | 文章详情正文结束后、评论区前（主题触发，如打赏/转载/相关推荐） |
@@ -163,6 +162,7 @@ QQ 插件认领 `qqlogin/start`（GET 点击后发起登录）、`qqlogin-callba
 | `ExternalMedia::isAllowedUrl($url)` | 判定单个 URL 是否可信（https + 主机命中），用于自定义渲染逻辑 |
 | `ExternalMedia::imgTag($url, $opts)` | `ext_img()` 的类实现，语义完全一致 |
 | `Theme::loadFunctions()` | 加载当前主题 `functions.php`。`Theme::renderPluginPage()` 内部会自动调用，通常无需手动调 |
+| `register_theme_markdown_renderer($callback)` | 当前主题在 `functions.php` 注册正文 Markdown 解析回调；接口契约及白名单限制见 `themes/README.md` §5.1。插件不应替主题注册解析器 |
 | `Theme::renderPluginPage($innerHtml, $ctx)` | **插件整页渲染的推荐入口**（优先于手工 `Theme::part()` 拼接）：设上下文 → `loadFunctions()` → 调用主题声明的 `theme_plugin_page_shell()`；主题未声明时降级为 `header`+`#content`+正文+`footer`。**不要自己拼骨架**——各主题的侧边栏位置与容器分工不同，手工拼接会在部分主题上漏侧边栏或多闭合 `</div>`（见 `themes/README.md` §5.0） |
 | `theme_set_context($ctx)` | 设置模板上下文（`title`/`page_type` 等）。`Theme::render()` 与 `Theme::renderPluginPage()` 都会写入，单独使用主要用于兼容旧写法 |
 | `register_verify_provider($channel)` | 声明验证码渠道能力（仅插件加载期可调，强制归属当前插件） |
@@ -317,20 +317,17 @@ function hello_world_page()
 
 ### 7.1 外链图片（唯一允许的第三方运行时资源）
 
-插件需要展示第三方站点（图床、B 站封面等）的图片时，唯一合法路径是**可信图床白名单**：
+插件需要展示第三方站点（图床、B 站封面等）的图片时，唯一合法路径是**可信图床白名单**。在插件目录根部提供可选的 `external-media.json`，把本插件功能直接依赖的主机作为其自身设置项的默认候选值：
+
+```json
+{"img_hosts": ["cdn.example.com", "*.images.example.com"]}
+```
+
+内核只读取静态 JSON，不执行插件代码来发现声明。主机须为精确域名或 `*.example.com` 形式，最多 32 条，必须是主机字面量，不允许 URL、IP、端口、路径、userinfo 或 localhost；无清单等同于空声明，清单格式无效时不能启用。插件启用前的确认框显示完整声明和实际将授权的子集，管理员确认后方可生效；确认绑定当时的静态声明与授权快照，扩展自行修改设置不能扩大已确认范围。后台「安全设置 → 外链图片信任」可修改或清空已确认插件的授权子集，只允许填写清单中声明过的主机；管理员清空后不得回退默认。停用插件后其授权不参与白名单，清单变更后旧确认失效，已启用插件也可在插件列表重新确认。管理员仍可单独在站点级白名单添加主机。只声明与本插件功能直接相关的主机，不得在渲染逻辑散落域名。
+
+站点级设置与已启用且确认的插件、当前主题的授权主机取并集，内核据此生成 CSP 和检查图片。输出时只走 `ext_img()`，并为空串准备降级：
 
 ```php
-// 1) 在设置页收集主机（管理员显式声明），保存时用内核规范化函数
-$hosts = ExternalMedia::sanitizeList(preg_split('/[\r\n,;]+/', input_text('img_hosts', '', 4000, 'post')));
-plugin_option_update('my-plugin', 'img_hosts', implode("\n", $hosts));
-
-// 2) 把本插件声明的主机注入内核白名单（CSP 与渲染校验同源）
-add_filter('front_img_src_hosts', function ($incoming) {
-    $raw = (string) plugin_option('my-plugin', 'img_hosts', '');
-    return array_merge((array) $incoming, ExternalMedia::sanitizeList(preg_split('/[\r\n,;]+/', $raw)));
-});
-
-// 3) 输出时只走 ext_img()，并为空串准备降级
 $img = ext_img($coverUrl, array('alt' => $title, 'class' => 'my-cover'));
 echo $img !== '' ? $img : '<span class="my-cover-none">' . e('封面未展示') . '</span>';
 ```
@@ -339,20 +336,7 @@ echo $img !== '' ? $img : '<span class="my-cover-none">' . e('封面未展示') 
 
 1. **默认关闭**：`options.img_ext_hosts` 为空数组且无插件/主题声明时，任何外链图片都不得输出，
    站点行为与"全部资源本地化"完全一致。
-2. **域名来源只有两种**：
-   (a) 管理员在「安全设置 → 外链图片信任」填写；
-   (b) 插件**以自身设置项的默认值**声明该功能直接依赖的主机（如封面站的 CDN）。
-
-   ```php
-   // 允许：作为设置项默认值，默认值在设置页可见、可改、可清空
-   define('MY_PLUGIN_DEFAULT_HOSTS', 'i0.hdslb.com');
-   $raw = (string) plugin_option('my-plugin', 'img_hosts', MY_PLUGIN_DEFAULT_HOSTS);
-   ```
-
-   走 (b) 时必须满足三条：**默认值在设置页可见可改**；**管理员清空后不得回退默认**
-   （`plugin_option()` 的默认值天然满足这点——只有 option 从未写入时才生效，存了空串就尊重清空）；
-   **不得把与本插件功能无关的第三方站点塞进默认值**。除此以外，仍**禁止**在渲染逻辑、
-   数组字面量、多处分支里散落域名。
+2. **域名来源只有两种**：管理员在安全设置填写的站点级主机，或上述经管理员确认且可编辑的插件/主题自身设置项默认值。清空后不回退，且不得把无关站点塞入声明。
 3. **只能经 `ext_img()` / `ExternalMedia::imgTag()` 输出**：这两个函数对未命中白名单的
    URL 返回空串；调用方必须降级（占位块、纯文字），**禁止回退成直接 `<img src>`**。
 4. **不要自己写 CSP**：`img-src` 由 `ExternalMedia::cspHeader()` 依据同一份白名单统一生成，
@@ -360,8 +344,12 @@ echo $img !== '' ? $img : '<span class="my-cover-none">' . e('封面未展示') 
 
 补充说明：
 
+- **旧插件迁移**：`front_img_src_hosts` 不再参与白名单计算；原通过该过滤器提供主机的已启用插件需要添加上述静态声明，并在插件列表重新确认，或由管理员显式加入站点级白名单。原有图片在完成授权前可能无法显示；请检查旧插件的主机设置与声明是否一致，并在安全设置核实实际授权子集。
+
 - 主机规则仅接受精确域名或 `*.example.com` 形式的一级通配；IP 字面量、端口、
   `userinfo@`、`localhost` 会被丢弃，单次上限 32 条。
+- 图片 URL 必须是无歧义的 HTTPS 绝对地址，不能包含反斜杠、原始空白或控制字符；
+  URL 主机本身不能包含通配符或编码字符，以免 PHP 与浏览器识别出不同主机。
 - 第三方图床普遍按 `Referer` 防盗链（B 站 CDN 对非 B 站 Referer 返回 403，对无 Referer 返回 200），
   所以 `ext_img()` 固定输出 `referrerpolicy="no-referrer"`；自行拼接的 `<img>` 不会有这个属性。
 - 图片由**访客浏览器直连第三方 CDN**，本站不代理、不转存，也不做 SSRF 检查（不存在服务端请求）；
@@ -383,5 +371,5 @@ echo $img !== '' ? $img : '<span class="my-cover-none">' . e('封面未展示') 
 - `plugins/custom/bangumi-wall/`：**站点定制插件示例**（位于 `plugins/custom/`，不入库）——
   自定义路由 `bangumi` 整页渲染（`route_parse` + `front_route_*` + `Theme::renderPluginPage()`）、
   服务端 HTTP 抓取与 `plugin_data_*` TTL 缓存、
-  `sidebar_widgets` 侧边栏小工具、`front_img_src_hosts` 外链图床白名单接入的完整实战。
+  `sidebar_widgets` 侧边栏小工具等功能的完整实战；旧外链主机过滤器请按 §7.1 迁移。
 
