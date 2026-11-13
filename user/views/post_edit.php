@@ -170,16 +170,32 @@ $isPageOn = $post && (int) $post['is_page'] === 1;
             extraData: { _csrf: <?php echo json_out_script(Csrf::token()); ?> },
             max: 2 * 1024 * 1024,
             accept: 'image/jpeg,image/png,image/webp,image/gif',
-            format: function (files, responseText) {
-                var resp = JSON.parse(responseText);
-                if (resp.code === 0) {
-                    return JSON.stringify({ code: 0, data: { succMap: (function () {
-                        var m = {};
-                        for (var i = 0; i < files.length; i++) { m[files[i].name] = resp.data.url; }
-                        return m;
-                    })() } });
+            // 粘贴图片时内置成功路径用 execCommand('insertHTML') 按 upload.range 插入。
+            // 默认分屏 sv 的选区落在行内 span，异步上传返回后 Range 已失效，浏览器会丢掉插入。
+            // 剪贴板文件名也常为空或无扩展名，succMap 对不上时同样不会生成 ![]()。
+            // 提供 success 后内置 format/genUploadedLabel 不再执行，改走 insertValue。
+            success: function (editor, responseText) {
+                var resp = null;
+                var url = '';
+                var msg = <?php echo json_out_script(admin_t('admin.upload.failed')); ?>;
+                try {
+                    resp = JSON.parse(responseText);
+                } catch (err) {
+                    resp = null;
                 }
-                return JSON.stringify({ code: 1, msg: resp.msg || <?php echo json_out_script(admin_t('admin.upload.failed')); ?> });
+                if (resp && resp.code === 0 && resp.data && resp.data.url) {
+                    url = String(resp.data.url);
+                    if (window.cbVditor && typeof window.cbVditor.insertValue === 'function') {
+                        window.cbVditor.insertValue('![image](' + url + ')\n');
+                        return;
+                    }
+                }
+                if (resp && resp.msg) {
+                    msg = resp.msg;
+                }
+                if (window.cbVditor && typeof window.cbVditor.tip === 'function') {
+                    window.cbVditor.tip(msg, 3000);
+                }
             }
         },
         input: function (value) { area.value = value; },

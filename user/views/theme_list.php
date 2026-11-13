@@ -25,6 +25,7 @@ defined('APP_BOOT') or exit;
         <tr class="empty-row"><td colspan="7"><?php echo e(admin_t('admin.theme.empty')); ?></td></tr>
         <?php endif; ?>
         <?php foreach ($themes as $themeDir => $meta): ?>
+        <?php $hostInfo = $mediaApproval[$themeDir]; ?>
         <tr>
             <td><?php echo e($themeDir); ?></td>
             <td><?php echo e($meta['name']); ?></td>
@@ -41,13 +42,23 @@ defined('APP_BOOT') or exit;
                 <?php if (!empty(Theme::settingsSchema($themeDir))): ?>
                 <a class="layui-btn layui-btn-xs layui-btn-primary" href="<?php echo e(site_base_admin('theme/setting&dir=' . rawurlencode($themeDir))); ?>"><?php echo e(admin_t('admin.theme.configure')); ?></a>
                 <?php endif; ?>
-                <?php if ($themeDir !== $active): ?>
-                <form method="post" action="<?php echo e(site_base_admin('theme/activate')); ?>">
+                <?php if ($themeDir !== $active || !$hostInfo['approved']): ?>
+                <?php
+                $declared = empty($hostInfo['hosts']) ? admin_t('admin.media.none') : implode(', ', $hostInfo['hosts']);
+                $selected = empty($hostInfo['selected']) ? admin_t('admin.media.none') : implode(', ', $hostInfo['selected']);
+                $message = admin_t('admin.media.theme_confirm', array($meta['name'], $declared, $selected));
+                ?>
+                <form method="post" action="<?php echo e(site_base_admin('theme/activate')); ?>"
+                      data-confirm="<?php echo e($message); ?>">
                     <?php echo Csrf::field(); ?>
                     <input type="hidden" name="dir" value="<?php echo e($themeDir); ?>">
-                    <button class="layui-btn layui-btn-xs layui-btn-normal"><?php echo e(admin_t('admin.common.enabled')); ?></button>
+                    <input type="hidden" name="img_confirm" value="">
+                    <input type="hidden" name="img_token" value="<?php echo e($hostInfo['token']); ?>">
+                    <input type="hidden" name="img_hosts_text" value="<?php echo e(implode(',', $hostInfo['selected'])); ?>">
+                    <button class="layui-btn layui-btn-xs layui-btn-normal" <?php echo empty($hostInfo['valid']) ? 'disabled' : ''; ?>><?php echo e(admin_t($themeDir === $active ? 'admin.media.reconfirm' : 'admin.common.enabled')); ?></button>
                 </form>
                 <?php endif; ?>
+                <?php if (empty($hostInfo['valid'])): ?><span class="tip"><?php echo e(admin_t('admin.media.invalid')); ?></span><?php endif; ?>
                 <?php if ($themeDir !== 'default' && $themeDir !== $active): ?>
                 <form method="post" action="<?php echo e(site_base_admin('theme/delete')); ?>"
                       data-confirm="<?php echo e(admin_t('admin.theme.delete_confirm')); ?>">

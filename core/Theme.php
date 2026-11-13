@@ -6,8 +6,54 @@ defined('APP_BOOT') or exit;
 
 class Theme
 {
+    /** @var callable|null 当前请求由主题注册的正文解析器 */
+    private static $markdownRenderer = null;
+
+    /** @var bool 防止主题解析器误调 render_content 时递归 */
+    private static $renderingMarkdown = false;
+
     /** 语言偏好 cookie 名（Front::langSwitch 写入，langLoad 读取） */
     const LANG_COOKIE = 'cb_theme_lang';
+
+    /**
+     * 注册主题的 Markdown 解析器，无效回调不覆盖已有注册。
+     *
+     * @param callable $renderer 接收 Markdown 字符串并返回 HTML 字符串
+     * @return bool
+     */
+    public static function registerMarkdownRenderer($renderer)
+    {
+        if (!is_callable($renderer)) {
+            return false;
+        }
+        self::$markdownRenderer = $renderer;
+        return true;
+    }
+
+    /**
+     * 使用主题解析器或内核默认解析器生成正文，主题结果仍由内核过滤。
+     *
+     * @param string $markdown Markdown 原文
+     * @return string
+     */
+    public static function renderMarkdown($markdown)
+    {
+        $markdown = (string) $markdown;
+        if (self::$markdownRenderer !== null && !self::$renderingMarkdown) {
+            self::$renderingMarkdown = true;
+            try {
+                $html = call_user_func(self::$markdownRenderer, $markdown);
+                if (is_string($html)) {
+                    return Markdown::sanitize($html, true);
+                }
+            } catch (Throwable $error) {
+                // 解析器失效时保留正文可读性，避免向访客泄露异常详情。
+            } finally {
+                self::$renderingMarkdown = false;
+            }
+        }
+        return Markdown::render($markdown);
+    }
 
     /** 当前启用主题目录名 */
     public static function current()
@@ -443,10 +489,21 @@ function the_post()
     return isset($ctx['post']) ? $ctx['post'] : null;
 }
 
+/**
+ * 注册主题专用 Markdown 解析器。
+ *
+ * @param callable $renderer 接收 Markdown 字符串并返回 HTML 字符串
+ * @return bool 注册成功返回 true
+ */
+function register_theme_markdown_renderer($renderer)
+{
+    return Theme::registerMarkdownRenderer($renderer);
+}
+
 /** 渲染文章正文：Markdown→安全 HTML，并应用 post_content 过滤器 */
 function render_content($markdown)
 {
-    $html = Markdown::render($markdown);
+    $html = Theme::renderMarkdown($markdown);
     return apply_filters('post_content', $html);
 }
 

@@ -131,18 +131,27 @@
                 e.preventDefault();
                 // 确认弹层文案可由后台语言包覆盖（window.CB_ADMIN_LANG 由 layout 注入）
                 var lang = window.CB_ADMIN_LANG || {};
-                layer.confirm(msg, {
+                layer.confirm(escapeHtml(msg).replace(/\n/g, '<br>'), {
                     icon: 3,
                     title: lang.confirm_title || '操作确认',
                     btn: [lang.confirm_ok || '确认', lang.confirm_cancel || '取消']
                 }, function (index) {
                     layer.close(index);
+                    var input = form.querySelector('input[name="img_confirm"]');
+                    if (input) {
+                        input.value = '1';
+                    }
                     form.submit();
                 });
             } else {
                 // layui 未加载时回退原生确认，功能不受影响
                 if (!window.confirm(msg)) {
                     e.preventDefault();
+                } else {
+                    var input = form.querySelector('input[name="img_confirm"]');
+                    if (input) {
+                        input.value = '1';
+                    }
                 }
             }
         });

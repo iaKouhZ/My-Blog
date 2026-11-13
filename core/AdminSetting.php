@@ -75,7 +75,9 @@ class AdminSetting
     public static function securityAction()
     {
         Auth::require_cap('manage_security');
-        Admin::render(admin_t('admin.menu.setting_security'), 'setting_security', array());
+        Admin::render(admin_t('admin.menu.setting_security'), 'setting_security', array(
+            'mediaApproval' => ExternalMedia::activeApprovals(),
+        ));
     }
 
     /** 保存安全设置 */
@@ -83,13 +85,61 @@ class AdminSetting
     {
         Auth::require_cap('manage_security');
         $changed = array();
+        $mediaChanges = array();
+        $mediaSaved = array();
 
+        // 只编辑已经确认的扩展；先检查全部令牌，防止旧页面误覆盖其他管理员的选择。
+        foreach (ExternalMedia::activeApprovals() as $kind => $entries) {
+            foreach ($entries as $id => $info) {
+                $suffix = $kind . '_' . $id;
+                $token = input_text('img_token_' . $suffix, '', 64, 'post');
+                if ($token === '') {
+                    continue;
+                }
+                $text = input_text('img_hosts_' . $suffix, '', 12001, 'post');
+                $hosts = ExternalMedia::validateApproval($kind, $id, $token, $text, true);
+                if ($hosts === false) {
+                    blog_log('security', 'setting.security', 'fail', array('reason' => 'media_confirmation_invalid', 'extension' => $suffix));
+                    flash_set('error', admin_t('admin.media.invalid_or_changed'));
+                    redirect(site_base_admin('setting/security'));
+                    return;
+                }
+                $mediaChanges[] = array('kind' => $kind, 'id' => $id, 'token' => $token, 'text' => $text, 'hosts' => $hosts, 'old' => $info['selected']);
+            }
+        }
         if (max(0, input_int('pwd_history_count', 0, 'post')) > 0) {
             try {
                 self::ensurePasswordHistoryTable();
             } catch (Throwable $ex) {
                 blog_log('security', 'setting.security', 'fail', array('reason' => 'password_history_schema_failed'));
                 throw $ex;
+            }
+        }
+        foreach ($mediaChanges as $entry) {
+            $extension = $entry['kind'] . '_' . $entry['id'];
+            try {
+                $saved = ExternalMedia::updateApproved($entry['kind'], $entry['id'], $entry['token'], $entry['text']);
+            } catch (Throwable $error) {
+                blog_log('security', 'setting.security', 'fail', array(
+                    'reason' => 'media_save_failed', 'extension' => $extension, 'applied' => $mediaSaved,
+                ));
+                throw $error;
+            }
+            if (!$saved) {
+                blog_log('security', 'setting.security', 'fail', array(
+                    'reason' => 'media_confirmation_invalid', 'extension' => $extension, 'applied' => $mediaSaved,
+                ));
+                flash_set('error', admin_t(empty($mediaSaved) ? 'admin.media.invalid_or_changed' : 'admin.media.partial_saved'));
+                redirect(site_base_admin('setting/security'));
+                return;
+            }
+            if ($entry['hosts'] !== $entry['old']) {
+                $changed[] = 'img_hosts_' . $extension;
+                $mediaSaved[] = $extension;
+                // 每项独立提交后立即审计，后续项目失败也不会遗漏已生效的授权变更。
+                blog_log('security', 'setting.media_hosts', 'success', array(
+                    'extension' => $extension, 'before' => $entry['old'], 'after' => $entry['hosts'],
+                ));
             }
         }
         $intRules = array(
